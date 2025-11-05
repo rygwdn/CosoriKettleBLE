@@ -280,23 +280,56 @@ automation:
 
 ### Example 2: Kettle Ready Notification
 
+**Note:** The kettle holds temperature when it reaches setpoint, so heating doesn't turn off. Use temperature threshold instead:
+
 ```yaml
 automation:
   - alias: "Kettle Ready"
     trigger:
-      - platform: state
-        entity_id: binary_sensor.kettle_heating
-        from: "on"
-        to: "off"
-    condition:
-      - condition: numeric_state
+      - platform: numeric_state
         entity_id: sensor.kettle_temperature
-        above: 180
+        above: 205  # Trigger a few degrees before setpoint
+    condition:
+      - condition: state
+        entity_id: binary_sensor.kettle_heating
+        state: "on"
     action:
       - service: notify.mobile_app
         data:
           title: "Kettle Ready"
           message: "Your water is hot! ☕"
+```
+
+### Example 3: Using Climate Entity
+
+```yaml
+automation:
+  - alias: "Morning Tea"
+    trigger:
+      - platform: time
+        at: "07:00:00"
+    condition:
+      - condition: state
+        entity_id: binary_sensor.kettle_on_base
+        state: "on"
+    action:
+      # Set temperature using climate entity
+      - service: climate.set_temperature
+        target:
+          entity_id: climate.kettle
+        data:
+          temperature: 100  # 100°C = 212°F
+      # Turn on heating
+      - service: climate.set_hvac_mode
+        target:
+          entity_id: climate.kettle
+        data:
+          hvac_mode: heat
+      # Wait 5 minutes then notify
+      - delay: "00:05:00"
+      - service: notify.mobile_app
+        data:
+          message: "Your tea water should be ready! ☕"
 ```
 
 ## Protocol Information
@@ -338,6 +371,18 @@ See the [protocol documentation](protocol.md) for details (if available).
 - Ensure kettle is on base (`binary_sensor.kettle_on_base` should be ON)
 - Check connection status
 - Enable debug logging to see protocol packets
+
+### Temperature Doesn't Reach Exact Setpoint
+
+The kettle may report temperatures 1-3°F below the setpoint when holding temperature. This is normal behavior:
+
+- The kettle cycles heating to maintain temperature
+- Temperature readings may fluctuate between 209-212°F when set to 212°F
+- Use a threshold automation (e.g., `above: 205`) instead of exact temperature matching
+- The `sensor.kettle_temperature` entity shows the actual kettle reading (always updated)
+- The climate entity temperature may lag slightly due to Fahrenheit→Celsius→Fahrenheit conversion
+
+**For accurate temperature monitoring**, use the dedicated `sensor.kettle_temperature` entity in your automations rather than the climate entity's current temperature.
 
 ## Debug Logging
 
