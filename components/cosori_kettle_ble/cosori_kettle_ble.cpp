@@ -125,6 +125,15 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       if (param->notify.handle != this->rx_char_handle_)
         break;
 
+      // Log full RX packet as hex dump
+      std::string hex_str;
+      for (uint16_t i = 0; i < param->notify.value_len; i++) {
+        char buf[4];
+        snprintf(buf, sizeof(buf), "%02x%s", param->notify.value[i], (i < param->notify.value_len - 1) ? ":" : "");
+        hex_str += buf;
+      }
+      ESP_LOGD(TAG, "RX: %s", hex_str.c_str());
+
       // Append to frame buffer
       this->frame_buffer_.insert(this->frame_buffer_.end(), param->notify.value,
                                  param->notify.value + param->notify.value_len);
@@ -220,10 +229,14 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
     return;
   }
 
-  // Log TX packet at DEBUG level
-  if (len >= 6) {
-    ESP_LOGD(TAG, "TX Packet: type=0x%02x seq=0x%02x len=%d", data[1], data[2], len);
+  // Log full TX packet as hex dump
+  std::string hex_str;
+  for (size_t i = 0; i < len; i++) {
+    char buf[4];
+    snprintf(buf, sizeof(buf), "%02x%s", data[i], (i < len - 1) ? ":" : "");
+    hex_str += buf;
   }
+  ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
 
   auto status = esp_ble_gattc_write_char(this->parent_->get_gattc_if(), this->parent_->get_conn_id(),
                                           this->tx_char_handle_, len, const_cast<uint8_t *>(data),
@@ -355,10 +368,6 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
   uint8_t temp = payload[7];      // Current temperature
   uint8_t status = payload[8];    // Byte 14: heating status
 
-  // Log packet details at DEBUG level
-  ESP_LOGD(TAG, "RX Status: stage=0x%02x mode=0x%02x sp=%d°F temp=%d°F status=0x%02x (len=%d)",
-           stage, mode, sp, temp, status, len);
-
   // Validate temperature range
   if (temp < 40 || temp > 230)
     return;
@@ -374,8 +383,7 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
 
   // Log when on_base state changes
   if (prev_on_base != this->on_base_) {
-    ESP_LOGI(TAG, "On-base state changed: %s -> %s (stage=0x%02x)",
-             prev_on_base ? "ON" : "OFF", this->on_base_ ? "ON" : "OFF", stage);
+    ESP_LOGI(TAG, "On-base: %s (stage=0x%02x)", this->on_base_ ? "ON" : "OFF", stage);
   }
 
   // Reset offline counter
@@ -383,13 +391,12 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
 
   // Update entities
   this->update_entities_();
-
-  ESP_LOGV(TAG, "Compact status: temp=%d°F, sp=%d°F, heating=%d, on_base=%d", temp, sp, this->heating_,
-           this->on_base_);
 }
 
 void CosoriKettleBLE::parse_extended_status_(const uint8_t *payload, size_t len) {
   // Extended status: 01 40 40 00 <stage> <mode> <sp> <temp> ...
+  // NOTE: Extended packets have a different structure than compact packets.
+  // On-base detection should only be done from compact (A5 22) packets.
   if (len < 8 || payload[0] != 0x01 || payload[1] != 0x40)
     return;
 
@@ -398,37 +405,22 @@ void CosoriKettleBLE::parse_extended_status_(const uint8_t *payload, size_t len)
   uint8_t sp = payload[6];
   uint8_t temp = payload[7];
 
-  // Log packet details at DEBUG level
-  ESP_LOGD(TAG, "RX Extended: stage=0x%02x mode=0x%02x sp=%d°F temp=%d°F (len=%d)",
-           stage, mode, sp, temp, len);
-
   // Validate temperature range
   if (temp < 40 || temp > 230)
     return;
 
-  // Update state
+  // Update state (temp and setpoint only - don't update on_base from extended packets)
   this->current_temp_f_ = temp;
   this->kettle_setpoint_f_ = sp;
-  bool prev_on_base = this->on_base_;
-  this->on_base_ = (stage != 0);  // Use byte 10 (payload[4]) for on-base detection
   this->heating_ = (stage != 0);
   this->status_received_ = true;
   this->last_status_seq_ = this->last_rx_seq_;
-
-  // Log when on_base state changes
-  if (prev_on_base != this->on_base_) {
-    ESP_LOGI(TAG, "On-base state changed: %s -> %s (stage=0x%02x) [Extended]",
-             prev_on_base ? "ON" : "OFF", this->on_base_ ? "ON" : "OFF", stage);
-  }
 
   // Reset offline counter
   this->reset_online_status_();
 
   // Update entities
   this->update_entities_();
-
-  ESP_LOGV(TAG, "Extended status: temp=%d°F, sp=%d°F, heating=%d, on_base=%d", temp, sp, this->heating_,
-           this->on_base_);
 }
 
 // ============================================================================
