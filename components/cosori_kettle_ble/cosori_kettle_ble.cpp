@@ -173,16 +173,41 @@ void CosoriKettleBLE::update() {
 // Protocol Implementation - Packet Sending
 // ============================================================================
 
+void CosoriKettleBLE::set_handshake_packet(int index, const std::vector<uint8_t> &data) {
+  switch (index) {
+    case 0:
+      this->custom_hello_1_ = data;
+      break;
+    case 1:
+      this->custom_hello_2_ = data;
+      break;
+    case 2:
+      this->custom_hello_3_ = data;
+      break;
+    default:
+      ESP_LOGW(TAG, "Invalid handshake packet index: %d", index);
+      return;
+  }
+  this->use_custom_handshake_ = true;
+  ESP_LOGD(TAG, "Custom handshake packet %d set (%d bytes)", index, data.size());
+}
+
 void CosoriKettleBLE::send_registration_() {
-  ESP_LOGI(TAG, "Sending registration handshake (HELLO_MIN)");
-
-  this->send_packet_(HELLO_MIN_1, sizeof(HELLO_MIN_1));
-  delay(80);
-
-  this->send_packet_(HELLO_MIN_2, sizeof(HELLO_MIN_2));
-  delay(80);
-
-  this->send_packet_(HELLO_MIN_3, sizeof(HELLO_MIN_3));
+  if (this->use_custom_handshake_) {
+    ESP_LOGI(TAG, "Sending registration handshake (custom)");
+    this->send_packet_(this->custom_hello_1_.data(), this->custom_hello_1_.size());
+    delay(80);
+    this->send_packet_(this->custom_hello_2_.data(), this->custom_hello_2_.size());
+    delay(80);
+    this->send_packet_(this->custom_hello_3_.data(), this->custom_hello_3_.size());
+  } else {
+    ESP_LOGI(TAG, "Sending registration handshake (HELLO_MIN)");
+    this->send_packet_(HELLO_MIN_1, sizeof(HELLO_MIN_1));
+    delay(80);
+    this->send_packet_(HELLO_MIN_2, sizeof(HELLO_MIN_2));
+    delay(80);
+    this->send_packet_(HELLO_MIN_3, sizeof(HELLO_MIN_3));
+  }
   delay(80);
 
   // Send initial poll

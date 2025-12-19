@@ -49,6 +49,9 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   bool is_connected() const { return this->node_state == esp32_ble_tracker::ClientState::ESTABLISHED; }
   bool is_ble_enabled() const { return ble_enabled_; }
 
+  // Custom handshake configuration (for different kettle firmware)
+  void set_handshake_packet(int index, const std::vector<uint8_t> &data);
+
   // Climate interface
   climate::ClimateTraits traits() override;
   void control(const climate::ClimateCall &call) override;
@@ -79,6 +82,12 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   uint32_t last_poll_time_{0};
   bool registration_sent_{false};
   bool target_setpoint_initialized_{false};
+
+  // Custom handshake storage (optional override for different kettle firmware)
+  std::vector<uint8_t> custom_hello_1_;
+  std::vector<uint8_t> custom_hello_2_;
+  std::vector<uint8_t> custom_hello_3_;
+  bool use_custom_handshake_{false};
 
   // Entity pointers
   sensor::Sensor *temperature_sensor_{nullptr};

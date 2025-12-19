@@ -384,6 +384,44 @@ See the [protocol documentation](protocol.md) for details (if available).
 - Check connection status
 - Enable debug logging to see protocol packets
 
+### Disconnects Immediately After "Sending registration handshake"
+
+If your kettle connects but immediately disconnects after the registration handshake (HELLO_MIN), your kettle may require a different handshake sequence. This can happen with different firmware versions.
+
+**Symptoms:**
+```
+[INFO] BLE connection opened
+[INFO] Service search complete
+[INFO] Registered for notifications, sending registration handshake
+[INFO] Sending registration handshake (HELLO_MIN)
+[WARN] BLE disconnected
+```
+
+**Solution:** Capture your kettle's handshake from the official VeSync app and configure it in ESPHome:
+
+1. **Capture the handshake** (Android):
+   - Enable Developer Options → Bluetooth HCI snoop log
+   - Toggle Bluetooth OFF then ON
+   - Connect to kettle using VeSync app
+   - Pull the log: `adb pull /data/misc/bluetooth/logs/btsnoop_hci.log`
+   - Open in Wireshark, filter: `btatt.opcode == 0x52`
+   - Find 3 writes to FFF2 characteristic right after connection
+
+2. **Configure custom handshake** in your ESPHome YAML:
+   ```yaml
+   cosori_kettle_ble:
+     ble_client_id: cosori_kettle_client
+     id: my_kettle
+     name: "Kettle"
+     # Custom handshake for different kettle firmware
+     handshake:
+       - "a5220024008a0081d1003634..."  # Packet 1 (hex, from capture)
+       - "373436613037333131..."        # Packet 2 (hex, from capture)
+       - "6262"                          # Packet 3 (hex, from capture)
+   ```
+
+The handshake packets can be specified with or without colons/spaces (e.g., `"a5:22:00"` or `"a52200"` both work).
+
 ### Temperature Doesn't Reach Exact Setpoint
 
 The kettle may report temperatures 1-3°F below the setpoint when holding temperature. This is normal behavior:
