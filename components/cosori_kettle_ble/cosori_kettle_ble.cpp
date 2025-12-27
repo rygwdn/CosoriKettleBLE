@@ -1,6 +1,7 @@
 #include "cosori_kettle_ble.h"
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
+#include <cmath>
 
 #ifdef USE_ESP32
 
@@ -505,7 +506,7 @@ void CosoriKettleBLE::start_heating() {
     return;
   }
 
-  uint8_t temp_f = (uint8_t) this->target_setpoint_f_;
+  uint8_t temp_f = static_cast<uint8_t>(std::round(this->target_setpoint_f_));
   uint8_t mode = (temp_f == 212) ? 0x04 : 0x06;
 
   ESP_LOGI(TAG, "Starting kettle at %.0f°F", this->target_setpoint_f_);
