@@ -675,7 +675,7 @@ void CosoriKettleBLE::update_entities_() {
     this->target_setpoint_f_ = this->kettle_setpoint_f_;
     this->target_setpoint_number_->publish_state(this->target_setpoint_f_);
     this->target_setpoint_initialized_ = true;
-    ESP_LOGI(TAG, "Initialized target setpoint to %d°F from kettle", (int)this->target_setpoint_f_);
+    ESP_LOGI(TAG, "Initialized target setpoint to %d°F from kettle", static_cast<int>(this->target_setpoint_f_));
   }
 
   if (this->on_base_binary_sensor_ != nullptr) {
