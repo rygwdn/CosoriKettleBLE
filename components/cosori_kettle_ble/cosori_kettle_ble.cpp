@@ -207,8 +207,13 @@ void CosoriKettleBLE::update() {
     return;
   }
 
-  // Send poll
-  this->send_poll_();
+  // Process command state machine
+  this->process_command_state_machine_();
+
+  // Send poll if not in the middle of a command sequence
+  if (this->command_state_ == CommandState::IDLE) {
+    this->send_poll_();
+  }
 }
 
 // ============================================================================
@@ -235,25 +240,10 @@ void CosoriKettleBLE::set_handshake_packet(int index, const std::vector<uint8_t>
 }
 
 void CosoriKettleBLE::send_registration_() {
-  if (this->use_custom_handshake_) {
-    ESP_LOGI(TAG, "Sending registration handshake (custom)");
-    this->send_packet_(this->custom_hello_1_.data(), this->custom_hello_1_.size());
-    delay(HANDSHAKE_DELAY_MS);
-    this->send_packet_(this->custom_hello_2_.data(), this->custom_hello_2_.size());
-    delay(HANDSHAKE_DELAY_MS);
-    this->send_packet_(this->custom_hello_3_.data(), this->custom_hello_3_.size());
-  } else {
-    ESP_LOGI(TAG, "Sending registration handshake (HELLO_MIN)");
-    this->send_packet_(HELLO_MIN_1, sizeof(HELLO_MIN_1));
-    delay(HANDSHAKE_DELAY_MS);
-    this->send_packet_(HELLO_MIN_2, sizeof(HELLO_MIN_2));
-    delay(HANDSHAKE_DELAY_MS);
-    this->send_packet_(HELLO_MIN_3, sizeof(HELLO_MIN_3));
-  }
-  delay(HANDSHAKE_DELAY_MS);
-
-  // Send initial poll
-  this->send_poll_();
+  // Start handshake state machine instead of blocking
+  ESP_LOGI(TAG, "Starting registration handshake");
+  this->command_state_ = CommandState::HANDSHAKE_PACKET_1;
+  this->command_state_time_ = millis();
 }
 
 void CosoriKettleBLE::send_poll_() {
@@ -574,32 +564,11 @@ void CosoriKettleBLE::start_heating() {
 
   ESP_LOGI(TAG, "Starting kettle at %.0f°F", this->target_setpoint_f_);
 
-  // Send HELLO5
-  this->send_hello5_();
-  delay(PRE_SETPOINT_DELAY_MS);
-
-  // Send SETPOINT
-  this->send_setpoint_(mode, temp_f);
-  delay(POST_SETPOINT_DELAY_MS);
-
-  // Wait for status (or timeout)
-  uint32_t start = millis();
-  while (millis() - start < STATUS_TIMEOUT_MS) {
-    // Process any pending notifications
-    App.feed_wdt();
-    delay(CONTROL_DELAY_MS);
-    if (this->status_received_)
-      break;
-  }
-
-  // Send START control
-  uint8_t seq_base = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
-  this->send_ctrl_(seq_base);
-  delay(CONTROL_DELAY_MS);
-
-  // Send reinforce control
-  uint8_t seq_ack = this->next_tx_seq_();
-  this->send_ctrl_(seq_ack);
+  // Store parameters and start state machine
+  this->pending_temp_f_ = temp_f;
+  this->pending_mode_ = mode;
+  this->command_state_ = CommandState::START_HELLO5;
+  this->command_state_time_ = millis();
 }
 
 void CosoriKettleBLE::stop_heating() {
@@ -610,17 +579,9 @@ void CosoriKettleBLE::stop_heating() {
 
   ESP_LOGI(TAG, "Stopping kettle");
 
-  // Send PRE_STOP (F4)
-  this->send_f4_();
-  delay(CONTROL_DELAY_MS);
-
-  // Send CTRL(stop)
-  uint8_t seq_ctrl = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
-  this->send_ctrl_(seq_ctrl);
-  delay(CONTROL_DELAY_MS);
-
-  // Send POST_STOP (F4)
-  this->send_f4_();
+  // Start stop sequence state machine
+  this->command_state_ = CommandState::STOP_PRE_F4;
+  this->command_state_time_ = millis();
 }
 
 void CosoriKettleBLE::enable_ble_connection(bool enable) {
@@ -808,6 +769,126 @@ void CosoriKettleBLE::track_online_status_() {
 
 void CosoriKettleBLE::reset_online_status_() {
   this->no_response_count_ = 0;
+}
+
+// ============================================================================
+// Command State Machine
+// ============================================================================
+
+void CosoriKettleBLE::process_command_state_machine_() {
+  uint32_t now = millis();
+  uint32_t elapsed = now - this->command_state_time_;
+
+  switch (this->command_state_) {
+    case CommandState::IDLE:
+      // Nothing to do
+      break;
+
+    case CommandState::HANDSHAKE_PACKET_1:
+      if (this->use_custom_handshake_) {
+        this->send_packet_(this->custom_hello_1_.data(), this->custom_hello_1_.size());
+      } else {
+        this->send_packet_(HELLO_MIN_1, sizeof(HELLO_MIN_1));
+      }
+      this->command_state_ = CommandState::HANDSHAKE_PACKET_2;
+      this->command_state_time_ = now;
+      break;
+
+    case CommandState::HANDSHAKE_PACKET_2:
+      if (elapsed >= HANDSHAKE_DELAY_MS) {
+        if (this->use_custom_handshake_) {
+          this->send_packet_(this->custom_hello_2_.data(), this->custom_hello_2_.size());
+        } else {
+          this->send_packet_(HELLO_MIN_2, sizeof(HELLO_MIN_2));
+        }
+        this->command_state_ = CommandState::HANDSHAKE_PACKET_3;
+        this->command_state_time_ = now;
+      }
+      break;
+
+    case CommandState::HANDSHAKE_PACKET_3:
+      if (elapsed >= HANDSHAKE_DELAY_MS) {
+        if (this->use_custom_handshake_) {
+          this->send_packet_(this->custom_hello_3_.data(), this->custom_hello_3_.size());
+        } else {
+          this->send_packet_(HELLO_MIN_3, sizeof(HELLO_MIN_3));
+        }
+        this->command_state_ = CommandState::HANDSHAKE_POLL;
+        this->command_state_time_ = now;
+      }
+      break;
+
+    case CommandState::HANDSHAKE_POLL:
+      if (elapsed >= HANDSHAKE_DELAY_MS) {
+        this->send_poll_();
+        this->command_state_ = CommandState::IDLE;
+        ESP_LOGI(TAG, "Registration handshake complete");
+      }
+      break;
+
+    case CommandState::START_HELLO5:
+      this->send_hello5_();
+      this->command_state_ = CommandState::START_SETPOINT;
+      this->command_state_time_ = now;
+      break;
+
+    case CommandState::START_SETPOINT:
+      if (elapsed >= PRE_SETPOINT_DELAY_MS) {
+        this->send_setpoint_(this->pending_mode_, this->pending_temp_f_);
+        this->command_state_ = CommandState::START_WAIT_STATUS;
+        this->command_state_time_ = now;
+      }
+      break;
+
+    case CommandState::START_WAIT_STATUS:
+      if (elapsed >= POST_SETPOINT_DELAY_MS) {
+        // Proceed to control even if no status (timeout after POST_SETPOINT_DELAY_MS)
+        uint8_t seq_base = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
+        this->send_ctrl_(seq_base);
+        this->command_state_ = CommandState::START_CTRL;
+        this->command_state_time_ = now;
+      }
+      break;
+
+    case CommandState::START_CTRL:
+      if (elapsed >= CONTROL_DELAY_MS) {
+        uint8_t seq_ack = this->next_tx_seq_();
+        this->send_ctrl_(seq_ack);
+        this->command_state_ = CommandState::START_CTRL_REINFORCE;
+        this->command_state_time_ = now;
+      }
+      break;
+
+    case CommandState::START_CTRL_REINFORCE:
+      if (elapsed >= CONTROL_DELAY_MS) {
+        this->command_state_ = CommandState::IDLE;
+        ESP_LOGD(TAG, "Start heating sequence complete");
+      }
+      break;
+
+    case CommandState::STOP_PRE_F4:
+      this->send_f4_();
+      this->command_state_ = CommandState::STOP_CTRL;
+      this->command_state_time_ = now;
+      break;
+
+    case CommandState::STOP_CTRL:
+      if (elapsed >= CONTROL_DELAY_MS) {
+        uint8_t seq_ctrl = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
+        this->send_ctrl_(seq_ctrl);
+        this->command_state_ = CommandState::STOP_POST_F4;
+        this->command_state_time_ = now;
+      }
+      break;
+
+    case CommandState::STOP_POST_F4:
+      if (elapsed >= CONTROL_DELAY_MS) {
+        this->send_f4_();
+        this->command_state_ = CommandState::IDLE;
+        ESP_LOGD(TAG, "Stop heating sequence complete");
+      }
+      break;
+  }
 }
 
 }  // namespace cosori_kettle_ble

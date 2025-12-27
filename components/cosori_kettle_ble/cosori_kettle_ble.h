@@ -83,6 +83,28 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   bool registration_sent_{false};
   bool target_setpoint_initialized_{false};
 
+  // Command sequence state machine
+  enum class CommandState {
+    IDLE,
+    HANDSHAKE_PACKET_1,
+    HANDSHAKE_PACKET_2,
+    HANDSHAKE_PACKET_3,
+    HANDSHAKE_POLL,
+    START_HELLO5,
+    START_SETPOINT,
+    START_WAIT_STATUS,
+    START_CTRL,
+    START_CTRL_REINFORCE,
+    STOP_PRE_F4,
+    STOP_CTRL,
+    STOP_POST_F4
+  };
+  
+  CommandState command_state_{CommandState::IDLE};
+  uint32_t command_state_time_{0};
+  uint8_t pending_mode_{0};
+  uint8_t pending_temp_f_{0};
+
   // Custom handshake storage (optional override for different kettle firmware)
   std::vector<uint8_t> custom_hello_1_;
   std::vector<uint8_t> custom_hello_2_;
@@ -127,6 +149,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   void update_climate_state_();
   void track_online_status_();
   void reset_online_status_();
+  void process_command_state_machine_();
 };
 
 // ============================================================================
