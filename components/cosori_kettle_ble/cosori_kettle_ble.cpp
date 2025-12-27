@@ -14,6 +14,33 @@ static const char *const TAG = "cosori_kettle_ble";
 static constexpr size_t MAX_FRAME_BUFFER_SIZE = 512;
 static constexpr size_t MAX_PAYLOAD_SIZE = 256;
 
+// Protocol constants
+static constexpr uint8_t FRAME_MAGIC = 0xA5;
+static constexpr uint8_t FRAME_TYPE_COMPACT_STATUS = 0x22;
+static constexpr uint8_t FRAME_TYPE_EXTENDED_STATUS = 0x12;
+static constexpr uint8_t FRAME_TYPE_COMMAND_A5_22 = 0x22;
+static constexpr uint8_t FRAME_TYPE_COMMAND_A5_12 = 0x12;
+
+// Temperature limits (Fahrenheit)
+static constexpr uint8_t MIN_TEMP_F = 104;
+static constexpr uint8_t MAX_TEMP_F = 212;
+static constexpr uint8_t MIN_VALID_READING_F = 40;
+static constexpr uint8_t MAX_VALID_READING_F = 230;
+
+// Operating modes
+static constexpr uint8_t MODE_BOIL = 0x04;
+static constexpr uint8_t MODE_HEAT = 0x06;
+
+// Timing constants (milliseconds)
+static constexpr uint32_t HANDSHAKE_DELAY_MS = 80;
+static constexpr uint32_t PRE_SETPOINT_DELAY_MS = 60;
+static constexpr uint32_t POST_SETPOINT_DELAY_MS = 100;
+static constexpr uint32_t CONTROL_DELAY_MS = 50;
+static constexpr uint32_t STATUS_TIMEOUT_MS = 2000;
+
+// Online/offline tracking
+static constexpr uint8_t NO_RESPONSE_THRESHOLD = 10;
+
 // BLE UUIDs
 static const char *COSORI_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
 static const char *COSORI_RX_CHAR_UUID = "0000fff1-0000-1000-8000-00805f9b34fb";
@@ -208,19 +235,19 @@ void CosoriKettleBLE::send_registration_() {
   if (this->use_custom_handshake_) {
     ESP_LOGI(TAG, "Sending registration handshake (custom)");
     this->send_packet_(this->custom_hello_1_.data(), this->custom_hello_1_.size());
-    delay(80);
+    delay(HANDSHAKE_DELAY_MS);
     this->send_packet_(this->custom_hello_2_.data(), this->custom_hello_2_.size());
-    delay(80);
+    delay(HANDSHAKE_DELAY_MS);
     this->send_packet_(this->custom_hello_3_.data(), this->custom_hello_3_.size());
   } else {
     ESP_LOGI(TAG, "Sending registration handshake (HELLO_MIN)");
     this->send_packet_(HELLO_MIN_1, sizeof(HELLO_MIN_1));
-    delay(80);
+    delay(HANDSHAKE_DELAY_MS);
     this->send_packet_(HELLO_MIN_2, sizeof(HELLO_MIN_2));
-    delay(80);
+    delay(HANDSHAKE_DELAY_MS);
     this->send_packet_(HELLO_MIN_3, sizeof(HELLO_MIN_3));
   }
-  delay(80);
+  delay(HANDSHAKE_DELAY_MS);
 
   // Send initial poll
   this->send_poll_();
@@ -290,8 +317,8 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
 std::vector<uint8_t> CosoriKettleBLE::build_a5_22_(uint8_t seq, const uint8_t *payload, size_t payload_len,
                                                     uint8_t checksum) {
   std::vector<uint8_t> pkt;
-  pkt.push_back(0xA5);
-  pkt.push_back(0x22);
+  pkt.push_back(FRAME_MAGIC);
+  pkt.push_back(FRAME_TYPE_COMMAND_A5_22);
   pkt.push_back(seq);
   pkt.push_back(payload_len & 0xFF);
   pkt.push_back((payload_len >> 8) & 0xFF);
@@ -303,8 +330,8 @@ std::vector<uint8_t> CosoriKettleBLE::build_a5_22_(uint8_t seq, const uint8_t *p
 std::vector<uint8_t> CosoriKettleBLE::build_a5_12_(uint8_t seq, const uint8_t *payload, size_t payload_len,
                                                     uint8_t checksum) {
   std::vector<uint8_t> pkt;
-  pkt.push_back(0xA5);
-  pkt.push_back(0x12);
+  pkt.push_back(FRAME_MAGIC);
+  pkt.push_back(FRAME_TYPE_COMMAND_A5_12);
   pkt.push_back(seq);
   pkt.push_back(payload_len & 0xFF);
   pkt.push_back((payload_len >> 8) & 0xFF);
@@ -349,9 +376,9 @@ std::vector<uint8_t> CosoriKettleBLE::make_ctrl_(uint8_t seq) {
 
 void CosoriKettleBLE::process_frame_buffer_() {
   while (true) {
-    // Find frame start (0xA5)
+    // Find frame start (FRAME_MAGIC)
     size_t start_idx = 0;
-    while (start_idx < this->frame_buffer_.size() && this->frame_buffer_[start_idx] != 0xA5) {
+    while (start_idx < this->frame_buffer_.size() && this->frame_buffer_[start_idx] != FRAME_MAGIC) {
       start_idx++;
     }
 
@@ -401,10 +428,10 @@ void CosoriKettleBLE::process_frame_buffer_() {
     this->last_rx_seq_ = seq;
 
     // Parse based on frame type
-    if (frame_type == 0x22) {
+    if (frame_type == FRAME_TYPE_COMPACT_STATUS) {
       // Compact status (A5 22)
       this->parse_compact_status_(payload, payload_len);
-    } else if (frame_type == 0x12) {
+    } else if (frame_type == FRAME_TYPE_EXTENDED_STATUS) {
       // Extended status (A5 12)
       this->parse_extended_status_(payload, payload_len);
     }
@@ -426,7 +453,7 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
   uint8_t status = payload[8];    // Heating status
 
   // Validate temperature range
-  if (temp < 40 || temp > 230)
+  if (temp < MIN_VALID_READING_F || temp > MAX_VALID_READING_F)
     return;
 
   // Update state (temp, setpoint, heating only - no on-base detection from compact packets)
@@ -456,7 +483,7 @@ void CosoriKettleBLE::parse_extended_status_(const uint8_t *payload, size_t len)
   uint8_t temp = payload[7];
 
   // Validate temperature range
-  if (temp < 40 || temp > 230)
+  if (temp < MIN_VALID_READING_F || temp > MAX_VALID_READING_F)
     return;
 
   // Update state (temp, setpoint, heating)
@@ -491,10 +518,10 @@ void CosoriKettleBLE::parse_extended_status_(const uint8_t *payload, size_t len)
 
 void CosoriKettleBLE::set_target_setpoint(float temp_f) {
   // Clamp to valid range
-  if (temp_f < 104)
-    temp_f = 104;
-  if (temp_f > 212)
-    temp_f = 212;
+  if (temp_f < MIN_TEMP_F)
+    temp_f = MIN_TEMP_F;
+  if (temp_f > MAX_TEMP_F)
+    temp_f = MAX_TEMP_F;
 
   this->target_setpoint_f_ = temp_f;
   ESP_LOGI(TAG, "Target setpoint changed to %.0f°F", temp_f);
@@ -507,24 +534,24 @@ void CosoriKettleBLE::start_heating() {
   }
 
   uint8_t temp_f = static_cast<uint8_t>(std::round(this->target_setpoint_f_));
-  uint8_t mode = (temp_f == 212) ? 0x04 : 0x06;
+  uint8_t mode = (temp_f == MAX_TEMP_F) ? MODE_BOIL : MODE_HEAT;
 
   ESP_LOGI(TAG, "Starting kettle at %.0f°F", this->target_setpoint_f_);
 
   // Send HELLO5
   this->send_hello5_();
-  delay(60);
+  delay(PRE_SETPOINT_DELAY_MS);
 
   // Send SETPOINT
   this->send_setpoint_(mode, temp_f);
-  delay(100);
+  delay(POST_SETPOINT_DELAY_MS);
 
   // Wait for status (or timeout)
   uint32_t start = millis();
-  while (millis() - start < 2000) {
+  while (millis() - start < STATUS_TIMEOUT_MS) {
     // Process any pending notifications
     App.feed_wdt();
-    delay(50);
+    delay(CONTROL_DELAY_MS);
     if (this->status_received_)
       break;
   }
@@ -532,7 +559,7 @@ void CosoriKettleBLE::start_heating() {
   // Send START control
   uint8_t seq_base = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
   this->send_ctrl_(seq_base);
-  delay(50);
+  delay(CONTROL_DELAY_MS);
 
   // Send reinforce control
   uint8_t seq_ack = this->next_tx_seq_();
@@ -549,12 +576,12 @@ void CosoriKettleBLE::stop_heating() {
 
   // Send PRE_STOP (F4)
   this->send_f4_();
-  delay(50);
+  delay(CONTROL_DELAY_MS);
 
   // Send CTRL(stop)
   uint8_t seq_ctrl = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
   this->send_ctrl_(seq_ctrl);
-  delay(50);
+  delay(CONTROL_DELAY_MS);
 
   // Send POST_STOP (F4)
   this->send_f4_();
@@ -728,11 +755,11 @@ void CosoriKettleBLE::update_climate_state_() {
 }
 
 void CosoriKettleBLE::track_online_status_() {
-  if (this->no_response_count_ < 10) {
+  if (this->no_response_count_ < NO_RESPONSE_THRESHOLD) {
     this->no_response_count_++;
   }
 
-  if (this->no_response_count_ >= 10 && this->status_received_) {
+  if (this->no_response_count_ >= NO_RESPONSE_THRESHOLD && this->status_received_) {
     ESP_LOGW(TAG, "No response from kettle, marking offline");
     this->status_received_ = false;
     // Publish unavailable state
