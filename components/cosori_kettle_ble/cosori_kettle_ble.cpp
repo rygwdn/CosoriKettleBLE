@@ -157,14 +157,17 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       if (param->notify.handle != this->rx_char_handle_)
         break;
 
-      // Log full RX packet as hex dump
-      std::string hex_str;
-      for (uint16_t i = 0; i < param->notify.value_len; i++) {
-        char buf[4];
-        snprintf(buf, sizeof(buf), "%02x%s", param->notify.value[i], (i < param->notify.value_len - 1) ? ":" : "");
-        hex_str += buf;
+      // Log full RX packet as hex dump (only when DEBUG level is enabled)
+      if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+        std::string hex_str;
+        hex_str.reserve(param->notify.value_len * 3);  // Pre-allocate: "xx:" per byte
+        for (uint16_t i = 0; i < param->notify.value_len; i++) {
+          char buf[4];
+          snprintf(buf, sizeof(buf), "%02x%s", param->notify.value[i], (i < param->notify.value_len - 1) ? ":" : "");
+          hex_str += buf;
+        }
+        ESP_LOGD(TAG, "RX: %s", hex_str.c_str());
       }
-      ESP_LOGD(TAG, "RX: %s", hex_str.c_str());
 
       // Check buffer size limit before appending
       if (this->frame_buffer_.size() + param->notify.value_len > MAX_FRAME_BUFFER_SIZE) {
@@ -318,14 +321,17 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
     return;
   }
 
-  // Log full TX packet as hex dump
-  std::string hex_str;
-  for (size_t i = 0; i < len; i++) {
-    char buf[4];
-    snprintf(buf, sizeof(buf), "%02x%s", data[i], (i < len - 1) ? ":" : "");
-    hex_str += buf;
+  // Log full TX packet as hex dump (only when DEBUG level is enabled)
+  if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+    std::string hex_str;
+    hex_str.reserve(len * 3);  // Pre-allocate: "xx:" per byte
+    for (size_t i = 0; i < len; i++) {
+      char buf[4];
+      snprintf(buf, sizeof(buf), "%02x%s", data[i], (i < len - 1) ? ":" : "");
+      hex_str += buf;
+    }
+    ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
   }
-  ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
 
   auto status = esp_ble_gattc_write_char(this->parent_->get_gattc_if(), this->parent_->get_conn_id(),
                                           this->tx_char_handle_, len, const_cast<uint8_t *>(data),
