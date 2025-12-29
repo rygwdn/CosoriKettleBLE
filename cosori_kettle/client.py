@@ -1,4 +1,12 @@
-"""BLE client wrapper for Cosori Kettle."""
+"""BLE client wrapper for Cosori Kettle.
+
+Protocol Overview:
+------------------
+See protocol.py for full protocol structure documentation.
+
+Envelope: 6 bytes [magic, frame_type, seq, len_lo, len_hi, checksum]
+Command: 4 bytes [protocol_ver, command_id, direction, padding] + body
+"""
 
 import asyncio
 import logging
@@ -6,9 +14,12 @@ from typing import Optional, Callable
 from bleak import BleakClient, BleakScanner, BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
-from .protocol import PacketParser, PacketBuilder, StatusPacket
+from .protocol import (
+    PacketParser, PacketBuilder, StatusPacket, Command,
+    MODE_BOIL, MODE_HEAT, MIN_TEMP_F, MAX_TEMP_F,
+    HANDSHAKE_DELAY_MS, PRE_SETPOINT_DELAY_MS, POST_SETPOINT_DELAY_MS, CONTROL_DELAY_MS
+)
 from .state import StateManager
-from .command_fsm import CommandStateMachine
 
 logger = logging.getLogger(__name__)
 
@@ -35,17 +46,13 @@ class CosoriKettleClient:
         self.parser = PacketParser()
         self.state_manager = StateManager(on_state_change)
         
-        # Will be initialized after reading device info
-        self.command_fsm: Optional[CommandStateMachine] = None
-        
-        # self._poll_task: Optional[asyncio.Task] = None
-        self._fsm_task: Optional[asyncio.Task] = None
         self._running = False
         self._registration_complete = False
         
         # Device version info
         self.hardware_version: Optional[str] = None
         self.software_version: Optional[str] = None
+        self.use_scan_hello: bool = False
     
     async def scan(self, name_filter: str = "Cosori") -> list[BLEDevice]:
         """Scan for Cosori kettles."""
@@ -96,15 +103,12 @@ class CosoriKettleClient:
             logger.info("Connected and subscribed to notifications")
             self.state_manager.set_connected(True)
             
-            
-            # Start registration handshake (will use version-specific hello packet)
-            self.command_fsm.start_registration()
-
             # Start background tasks
             self._running = True
-            # self._poll_task = asyncio.create_task(self._poll_loop())
-            self._fsm_task = asyncio.create_task(self._fsm_loop())
             self._registration_complete = False
+            
+            # Start registration handshake (async, no FSM needed)
+            asyncio.create_task(self._do_registration())
             
             return True
             
@@ -116,20 +120,6 @@ class CosoriKettleClient:
     async def disconnect(self) -> None:
         """Disconnect from kettle."""
         self._running = False
-        
-        # if self._poll_task:
-        #     self._poll_task.cancel()
-        #     try:
-        #         await self._poll_task
-        #     except asyncio.CancelledError:
-        #         pass
-        
-        if self._fsm_task:
-            self._fsm_task.cancel()
-            try:
-                await self._fsm_task
-            except asyncio.CancelledError:
-                pass
         
         if self.client and self.client.is_connected:
             await self.client.disconnect()
@@ -145,7 +135,7 @@ class CosoriKettleClient:
     
     async def _read_device_info(self) -> None:
         """Read hardware and software version from device info service."""
-        use_scan_hello = False
+        self.use_scan_hello = False
         
         try:
             # Get device info service
@@ -170,71 +160,58 @@ class CosoriKettleClient:
                 # Determine which hello packet to use
                 if self.hardware_version == '1.0.00' and self.software_version == 'R0007V0012':
                     logger.info("Using scan.py hello payload for version 1.0.00/R0007V0012")
-                    use_scan_hello = True
+                    self.use_scan_hello = True
                 else:
                     logger.info("Using default C++ hello payload")
                 
         except Exception as e:
             logger.warning(f"Failed to read device info: {e}")
-        
-        # Initialize command FSM with the appropriate hello version
-        self.command_fsm = CommandStateMachine(
-            send_packet_callback=self._send_packet_internal,
-            get_seq_callback=self.state_manager.next_tx_seq,
-            get_status_seq_callback=lambda: self.state_manager.last_status_seq,
-            use_scan_hello=use_scan_hello
-        )
     
     def _notification_handler(self, char: BleakGATTCharacteristic, data: bytearray) -> None:
-        """Handle BLE notification."""
-        # Log received data
+        """Handle BLE notification from device."""
         hex_str = ":".join(f"{b:02x}" for b in data)
         logger.info(f"RX: {hex_str}")
         
-        # Append to parser buffer
         self.parser.append_data(bytes(data))
-        
-        # Process frames (parser handles multi-packet messages using length field)
         packets = self.parser.process_frames()
+        
         for packet in packets:
             if isinstance(packet, StatusPacket) and packet.packet_type == "extended":
-                # Registration complete when we receive extended status
                 if not self._registration_complete:
                     self._registration_complete = True
                     logger.info("Registration handshake complete")
             
-            # Update state
             self.state_manager.update_from_packet(packet)
     
-    def _send_packet_internal(self, packet: bytes) -> None:
-        """Internal packet sender (called by FSM)."""
-        if not self.tx_char or not self.client or not self.client.is_connected:
-            logger.warning("Cannot send packet: not connected")
-            return
-        
-        
-        # Send packet (may span multiple BLE writes if large)
-        asyncio.create_task(self._send_packet_split(packet))
+    async def _do_registration(self) -> None:
+        """Perform registration handshake: hello -> delay -> poll."""
+        try:
+            hello_pkt = PacketBuilder.make_hello(0)
+            await self._send_packet_split(hello_pkt)
+            
+            await asyncio.sleep(HANDSHAKE_DELAY_MS / 1000.0)
+            
+            seq = self.state_manager.next_tx_seq()
+            poll_pkt = PacketBuilder.make_poll(seq)
+            await self._send_packet_split(poll_pkt)
+        except Exception as e:
+            logger.error(f"Registration error: {e}")
     
     async def _send_packet_split(self, packet: bytes) -> None:
-        """Send packet, splitting into chunks if needed (like uart_example.py)."""
+        """Send packet, splitting into 20-byte chunks if needed."""
         if not self.tx_char or not self.client or not self.client.is_connected:
             return
         
-        max_size = 20 #self.tx_char.max_write_without_response_size
+        max_size = 20
         if len(packet) <= max_size:
-            # Log sent packet
             hex_str = ":".join(f"{b:02x}" for b in packet)
-            logger.info(f"TX: {hex_str} (single write, <{max_size} bytes)")
-            # Single write
+            logger.info(f"TX: {hex_str}")
             await self.client.write_gatt_char(self.tx_char, packet, response=False)
         else:
-            # Split into chunks (like uart_example.py sliced function)
             for i in range(0, len(packet), max_size):
                 chunk = packet[i:i + max_size]
-                # Log sent packet
                 hex_str = ":".join(f"{b:02x}" for b in chunk)
-                logger.info(f"TX: {hex_str} (chunk {i//max_size + 1} of {len(packet)//max_size})")
+                logger.info(f"TX: {hex_str} (chunk {i//max_size + 1})")
                 await self.client.write_gatt_char(self.tx_char, chunk, response=False)
     
     async def send_packet(self, packet: bytes) -> None:
@@ -244,7 +221,7 @@ class CosoriKettleClient:
         await self._send_packet_split(packet)
     
     async def poll(self) -> None:
-        """Send poll command."""
+        """Send poll/status request."""
         if not self.is_connected():
             return
         seq = self.state_manager.next_tx_seq()
@@ -252,19 +229,32 @@ class CosoriKettleClient:
         await self.send_packet(poll_pkt)
     
     async def set_target_temperature(self, temp_f: float) -> None:
-        """Set target temperature."""
-        from .protocol import MIN_TEMP_F, MAX_TEMP_F, MODE_BOIL, MODE_HEAT
+        """Set target temperature and start heating.
         
-        # Clamp to valid range
+        Sequence: hello5 -> delay -> setpoint -> delay -> ack -> delay -> ack
+        """
         temp_f = max(MIN_TEMP_F, min(MAX_TEMP_F, temp_f))
         temp_f_int = int(round(temp_f))
-        
         self.state_manager.state.target_setpoint_f = temp_f
-        
         mode = MODE_BOIL if temp_f_int == MAX_TEMP_F else MODE_HEAT
         
         logger.info(f"Setting target temperature to {temp_f_int}°F (mode={mode:02x})")
-        self.command_fsm.start_heating(mode, temp_f_int)
+        
+        seq = self.state_manager.next_tx_seq()
+        await self._send_packet_split(PacketBuilder.make_hello5(seq))
+        await asyncio.sleep(PRE_SETPOINT_DELAY_MS / 1000.0)
+        
+        seq = self.state_manager.next_tx_seq()
+        await self._send_packet_split(PacketBuilder.make_setpoint(seq, mode, temp_f_int))
+        await asyncio.sleep(POST_SETPOINT_DELAY_MS / 1000.0)
+        
+        seq_base = self.state_manager.last_status_seq or self.state_manager.next_tx_seq()
+        await self._send_packet_split(PacketBuilder.make_ack(seq_base, Command.STATUS_COMPACT))
+        await asyncio.sleep(CONTROL_DELAY_MS / 1000.0)
+        
+        seq_ack = self.state_manager.next_tx_seq()
+        await self._send_packet_split(PacketBuilder.make_ack(seq_ack, Command.STATUS_COMPACT))
+        await asyncio.sleep(CONTROL_DELAY_MS / 1000.0)
     
     async def start_heating(self) -> None:
         """Start heating to target temperature."""
@@ -272,35 +262,22 @@ class CosoriKettleClient:
         await self.set_target_temperature(temp_f)
     
     async def stop_heating(self) -> None:
-        """Stop heating."""
+        """Stop heating.
+        
+        Sequence: stop -> delay -> ack -> delay -> stop
+        """
         logger.info("Stopping heating")
-        self.command_fsm.start_stop()
-    
-    # async def _poll_loop(self) -> None:
-    #     """Background polling loop."""
-    #     while self._running:
-    #         try:
-    #             if self.is_connected() and self._registration_complete:
-    #                 await self.poll()
-    #             await asyncio.sleep(2.0)  # Poll every 2 seconds
-    #         except asyncio.CancelledError:
-    #             break
-    #         except Exception as e:
-    #             logger.error(f"Poll error: {e}")
-    #             await asyncio.sleep(2.0)
-    
-    async def _fsm_loop(self) -> None:
-        """Background FSM processing loop."""
-        while self._running:
-            try:
-                if self.command_fsm:
-                    self.command_fsm.process()
-                await asyncio.sleep(0.01)  # 10ms loop
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.error(f"FSM error: {e}")
-                await asyncio.sleep(0.01)
+        
+        seq = self.state_manager.next_tx_seq()
+        await self._send_packet_split(PacketBuilder.make_stop(seq))
+        await asyncio.sleep(CONTROL_DELAY_MS / 1000.0)
+        
+        seq_ctrl = self.state_manager.last_status_seq or self.state_manager.next_tx_seq()
+        await self._send_packet_split(PacketBuilder.make_ack(seq_ctrl, Command.STATUS_COMPACT))
+        await asyncio.sleep(CONTROL_DELAY_MS / 1000.0)
+        
+        seq = self.state_manager.next_tx_seq()
+        await self._send_packet_split(PacketBuilder.make_stop(seq))
     
     def is_connected(self) -> bool:
         """Check if connected."""

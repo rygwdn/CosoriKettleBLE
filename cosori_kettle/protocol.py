@@ -1,17 +1,33 @@
-"""Protocol layer for Cosori Kettle BLE communication."""
+"""Protocol layer for Cosori Kettle BLE communication.
+
+Protocol Structure:
+-------------------
+Envelope (6 bytes):
+    - 0xA5              : magic byte
+    - 0x22 | 0x12       : frame type (0x22=message, 0x12=ack)
+    - 0x00-0xFF         : sequence number (ack matches command seq)
+    - 0x00-0xFF         : payload length low byte
+    - 0x00-0xFF         : payload length high byte
+    - 0x00-0xFF         : checksum
+
+Command (4 bytes, first part of payload):
+    - 0x00 | 0x01       : protocol version?
+    - 0x00-0xFF         : command ID?
+    - 0x40 | 0xA3       : direction/type?
+    - 0x00              : padding?
+
+... additional body bytes follow command
+"""
 
 from dataclasses import dataclass
 from typing import Optional, Tuple
 import struct
 
 
-# Protocol constants
+# Protocol constants - Envelope
 FRAME_MAGIC = 0xA5
-FRAME_TYPE_COMPACT_STATUS = 0x22
-FRAME_TYPE_EXTENDED_STATUS = 0x12
-FRAME_TYPE_COMMAND_A5_22 = 0x22
-FRAME_TYPE_COMMAND_A5_12 = 0x12
-FRAME_TYPE_POLL = 0x21
+FRAME_TYPE_MESSAGE = 0x22  # Messages sent to/from device
+FRAME_TYPE_ACK = 0x12      # Acknowledgments (mirror seq+command from original message)
 
 # Temperature limits (Fahrenheit)
 MIN_TEMP_F = 104
@@ -23,20 +39,55 @@ MAX_VALID_READING_F = 230
 MODE_BOIL = 0x04
 MODE_HEAT = 0x06
 
-# Registration handshake payloads (header will be computed by build_send)
-# Default (from C++ implementation) - works with most firmware versions
-HELLO_PAYLOAD_DEFAULT = bytes.fromhex(
-    '0181d100'  # Header
-    '3634323837613931376537343661303733313136'  # Part 1 + 2
-    '366237366634336435636262'  # Part 3
-)
+# Protocol commands (4-byte command header)
+class Command:
+    """4-byte command headers for protocol packets."""
+    POLL = bytes.fromhex("01404000")          # Poll/status request
+    STATUS_COMPACT = bytes.fromhex("01414000")  # Compact status response
+    STATUS_EXTENDED = bytes.fromhex("01404000") # Extended status response
+    V1_HELLO = bytes.fromhex("0181D100")         # Registration hello
+    V1_STOP = bytes.fromhex("01F4A300")          # Stop heating
 
-# Version-specific (from scan.py) - for hardware 1.0.00, software R0007V0012
-HELLO_PAYLOAD_SCAN = bytes.fromhex(
-    '0181d100'  # Header
-    '39393033653031613363'  # Part 1
-    '3362616138663663373163626235313637653764'  # Part 2  
-    '3566'  # Part 3
+    V0_HELLO5 = bytes.fromhex("00F2A300")        # Pre-setpoint hello
+    V0_SETPOINT = bytes.fromhex("00F0A300")      # Set temperature/mode
+    V0_STOP = bytes.fromhex("00F4A300")          # Stop heating
+
+"""
+v1 commands:
+- start heating: 01F0 A300 yyyy bb zzzz
+- delay start: 01F1 A300 xxxx yyyy bb zzzz
+  xxxx: delay in seconds in big-endian (10_0E == 3600s == 60 minutes)
+  yyyy: mode (0300 for coffee, 0400 for boil, 0500 for "mytemp", etc.)
+  bb: enable hold (01 on, 00 off)
+  zzzz: hold time in seconds in big-endian (34_08 == 2100s == 35 mins)
+- stop: 01F4 A300
+- set mytemp temp: 01F3_A300_{temp}
+- set mytemp baby-formula mode: 01F5_A300_{0 or 1}
+- ?? sent from device when it finished..: 01F7 A300 xx
+  xx: 20 = done (might hold), 21 = hold done
+- hello: 0181 D100 {bytes}
+  bytes: 32 bytes which is 16 byte key encoded as ascii hex. appears to be tied to the controller device/app or the account
+  - ack will have payload '00' on success
+
+# TODO: implement registration
+- register: 0180 D100 {bytes}
+  - ack will have payload '00' on success
+  - device must be in pairing mode
+"""
+
+# TODO: handle error states?
+"""
+maybe error state??
+
+A512 631D 0071 0140 4000 0304 D4D4 AF01 B004 B004 0000 0058 0200 0000 0000 (B004) 0000 01
+A512 641D 0070 0140 4000 0304 D4D4 AF01 B004 B004 0000 0058 0200 0000 0000 (B004) 0000 01
+"""
+
+
+# TODO: looks like 16 bytes of random data (key) encoded as hex as ascii to get 32 bytes
+REGISTRATION_CODE = bytes.fromhex(
+    # '3634323837613931376537343661303733313136366237366634336435636262'
+    '3939303365303161336333626161386636633731636262353136376537643566'
 )
 
 
@@ -61,8 +112,20 @@ class UnknownPacket:
     payload: bytes
 
 
+# Timing constants (milliseconds)
+# TODO: replace these with waits for acks
+HANDSHAKE_DELAY_MS = 80
+PRE_SETPOINT_DELAY_MS = 60
+POST_SETPOINT_DELAY_MS = 100
+CONTROL_DELAY_MS = 50
+
+# TODO: two protocol classes with different implementations sharing helper functions
+
 class PacketBuilder:
-    """Builds protocol packets for Cosori Kettle."""
+    """Builds protocol packets for Cosori Kettle.
+    
+    See module docstring for protocol structure details.
+    """
     
     @staticmethod
     def calculate_checksum(packet: bytes) -> int:
@@ -77,97 +140,98 @@ class PacketBuilder:
         return checksum
     
     @staticmethod
-    def build_send(seq: int, payload: bytes) -> bytes:
-        """Build send frame (0x22 - commands sent to kettle)."""
+    def build_frame(frame_type: int, seq: int, payload: bytes) -> bytes:
+        """Build frame with envelope and payload.
+        
+        Args:
+            frame_type: 0x22=message, 0x12=ack
+            seq: Sequence number (0x00-0xFF)
+            payload: Command + body bytes
+        """
         payload_len = len(payload)
         len_lo = payload_len & 0xFF
         len_hi = (payload_len >> 8) & 0xFF
         
         # Build packet with checksum=0x01 initially
-        packet = bytes([FRAME_MAGIC, 0x22, seq, len_lo, len_hi, 0x01]) + payload
+        packet = bytes([FRAME_MAGIC, frame_type, seq, len_lo, len_hi, 0x01]) + payload
         
-        # Calculate actual checksum
+        # Calculate and replace checksum
         checksum = PacketBuilder.calculate_checksum(packet)
-        
-        # Replace checksum byte
         return packet[:5] + bytes([checksum]) + packet[6:]
     
     @staticmethod
-    def build_recv(seq: int, payload: bytes) -> bytes:
-        """Build recv frame (0x12 - control/ack packets sent to kettle)."""
-        payload_len = len(payload)
-        len_lo = payload_len & 0xFF
-        len_hi = (payload_len >> 8) & 0xFF
-        
-        # Build packet with checksum=0x01 initially
-        packet = bytes([FRAME_MAGIC, 0x12, seq, len_lo, len_hi, 0x01]) + payload
-        
-        # Calculate actual checksum
-        checksum = PacketBuilder.calculate_checksum(packet)
-        
-        # Replace checksum byte
-        return packet[:5] + bytes([checksum]) + packet[6:]
-    
-    @staticmethod
-    def make_poll(seq: int) -> bytes:
-        """Create poll/status request packet (0x21)."""
-        # original
-        # payload = bytes([0x00, 0x40, 0x40, 0x00])
-        # return PacketBuilder.build_send(seq, bytes([0x00, 0x40, 0x40, 0x00]))
-        
-        # mine..
-        return PacketBuilder.build_send(seq, bytes([0x01, 0x40, 0x40, 0x00]))
-        # Value: A522 0104 00B2 0140 4000
-
-        # # Build packet with checksum=0x01 initially
-        # packet = bytes([FRAME_MAGIC, 0x22, seq, 0x04, 0x00, 0xB2]) + payload
-        
-        # # Calculate actual checksum
-        # # TODO: this should be 'set_checksum' 
-        # # TODO: should have a 'make_payload' that takes payload & frame type, sets magic, sets the sequence, and then sets the checksum
-        # checksum = PacketBuilder.calculate_checksum(packet)
-        
-        # # Replace checksum byte
-        # return packet[:5] + bytes([checksum]) + packet[6:]
-    
-    @staticmethod
-    def make_hello(seq: int, use_scan_version: bool = False) -> bytes:
-        """Create registration hello packet (0x22 with combined payload).
+    def build_send(seq: int, command: bytes, body: bytes = b'') -> bytes:
+        """Build message frame (0x22).
         
         Args:
             seq: Sequence number
-            use_scan_version: If True, use scan.py version for hw 1.0.00/sw R0007V0012
+            command: 4-byte command header (use Command constants)
+            body: Additional payload bytes after command
         """
-        payload = HELLO_PAYLOAD_SCAN if use_scan_version else HELLO_PAYLOAD_DEFAULT
-        return PacketBuilder.build_send(seq, payload)
+        # TODO: when sending a message, should wait for the ack
+        payload = command + body
+        return PacketBuilder.build_frame(FRAME_TYPE_MESSAGE, seq, payload)
+    
+    @staticmethod
+    def build_ack(seq: int, command: bytes, body: bytes = b'') -> bytes:
+        """Build ACK frame (0x12).
+        
+        ACKs mirror the original message's sequence and command.
+        
+        Args:
+            seq: Sequence number (from original message)
+            command: 4-byte command header (from original message)
+            body: Additional payload bytes (typically empty for ACKs)
+        """
+        payload = command + body
+        return PacketBuilder.build_frame(FRAME_TYPE_ACK, seq, payload)
+    
+    @staticmethod
+    def make_poll(seq: int) -> bytes:
+        """Create poll/status request."""
+        return PacketBuilder.build_send(seq, Command.POLL)
+    
+    @staticmethod
+    def make_hello(seq: int) -> bytes:
+        """Create registration hello packet.
+        """
+        return PacketBuilder.build_send(seq, Command.V1_HELLO, REGISTRATION_CODE)
     
     @staticmethod
     def make_hello5(seq: int) -> bytes:
-        """Create HELLO5 packet (0x22 with 0xF2A3 payload)."""
-        payload = bytes([0x00, 0xF2, 0xA3, 0x00, 0x00, 0x01, 0x10, 0x0E])
-        return PacketBuilder.build_send(seq, payload)
+        """Create hello5 packet (pre-setpoint)."""
+        # TODO: mine doesn't do this?
+        return PacketBuilder.build_send(seq, Command.V0_HELLO5, bytes([0x00, 0x01, 0x10, 0x0E]))
     
     @staticmethod
     def make_setpoint(seq: int, mode: int, temp_f: int) -> bytes:
-        """Create setpoint packet (0x22 with 0xF0A3 payload)."""
-        payload = bytes([0x00, 0xF0, 0xA3, 0x00, mode, temp_f, 0x01, 0x10, 0x0E])
-        return PacketBuilder.build_send(seq, payload)
+        """Create setpoint packet.
+        """
+        body = bytes([mode, temp_f, 0x01, 0x10, 0x0E])
+        return PacketBuilder.build_send(seq, Command.V0_SETPOINT, body)
     
     @staticmethod
-    def make_f4(seq: int) -> bytes:
-        """Create F4 packet (0x22 with 0xF4A3 payload)."""
-        payload = bytes([0x00, 0xF4, 0xA3, 0x00])
-        return PacketBuilder.build_send(seq, payload)
+    def make_stop(seq: int) -> bytes:
+        """Create stop heating packet."""
+        # TODO: by version..
+        return PacketBuilder.build_send(seq, Command.V0_STOP)
     
     @staticmethod
-    def make_ctrl(seq: int) -> bytes:
-        """Create control packet (0x12)."""
-        payload = bytes([0x00, 0x41, 0x40, 0x00])
-        return PacketBuilder.build_recv(seq, payload)
+    def make_ack(seq: int, command: bytes) -> bytes:
+        """Create ACK packet (frame type 0x12) mirroring original message.
+        
+        Args:
+            seq: Sequence from original message being acknowledged
+            command: Command from original message being acknowledged
+        """
+        return PacketBuilder.build_ack(seq, command)
 
 
 class PacketParser:
-    """Parses protocol packets from Cosori Kettle."""
+    """Parses protocol packets from Cosori Kettle.
+    
+    See module docstring for envelope structure.
+    """
     
     MAX_FRAME_BUFFER_SIZE = 512
     MAX_PAYLOAD_SIZE = 256
@@ -178,30 +242,28 @@ class PacketParser:
     def append_data(self, data: bytes) -> None:
         """Append received BLE notification data to frame buffer."""
         if len(self.frame_buffer) + len(data) > self.MAX_FRAME_BUFFER_SIZE:
-            # Buffer overflow - clear it
             self.frame_buffer.clear()
         self.frame_buffer.extend(data)
     
     def process_frames(self) -> list:
-        """Process complete frames from buffer. Returns list of parsed packets."""
+        """Process complete frames from buffer."""
         packets = []
         
+        # TODO: parse using structs
         while True:
-            # Find frame start (FRAME_MAGIC)
+            # Find frame start
             start_idx = 0
             while start_idx < len(self.frame_buffer) and self.frame_buffer[start_idx] != FRAME_MAGIC:
                 start_idx += 1
             
-            # Discard bytes before frame start
             if start_idx > 0:
                 self.frame_buffer = self.frame_buffer[start_idx:]
             
-            # Need at least 6 bytes for header
+            # Need at least 6 bytes for envelope
             if len(self.frame_buffer) < 6:
                 break
             
-            # Parse header
-            magic = self.frame_buffer[0]
+            # Parse envelope
             frame_type = self.frame_buffer[1]
             seq = self.frame_buffer[2]
             payload_len = self.frame_buffer[3] | (self.frame_buffer[4] << 8)
@@ -210,59 +272,58 @@ class PacketParser:
             
             # Validate payload length
             if payload_len > self.MAX_PAYLOAD_SIZE:
-                # Invalid length - discard this byte and continue
                 self.frame_buffer = self.frame_buffer[1:]
                 continue
             
-            # Wait for complete frame (use length field to determine if we have all of it)
+            # Wait for complete frame
             if len(self.frame_buffer) < frame_len:
-                # Incomplete frame - wait for more data
                 break
             
             # Validate checksum
-            # Build packet with received checksum to calculate expected value
             test_packet = bytes(self.frame_buffer[:frame_len])
-            # Replace checksum byte with 0x01 for calculation
             test_packet = test_packet[:5] + bytes([0x01]) + test_packet[6:]
             calculated_checksum = PacketBuilder.calculate_checksum(test_packet)
             if received_checksum != calculated_checksum:
-                # Bad checksum - discard this byte and continue
                 self.frame_buffer = self.frame_buffer[1:]
                 continue
             
             # Extract payload
             payload = bytes(self.frame_buffer[6:6+payload_len])
             
+            # TODO: parse envelope sepparately, then parse the payload based on frame type and command, just pass the parse_{command} the payload after the command id
             # Parse based on frame type
             parsed = None
-            if frame_type == FRAME_TYPE_COMPACT_STATUS:
-                parsed = self._parse_compact_status(seq, payload)
-            elif frame_type == FRAME_TYPE_EXTENDED_STATUS:
-                parsed = self._parse_extended_status(seq, payload)
+            if frame_type == FRAME_TYPE_MESSAGE:
+                parsed = self._parse_message(seq, payload)
+            elif frame_type == FRAME_TYPE_ACK:
+                parsed = self._parse_ack(seq, payload)
             else:
-                # Unknown frame type
                 parsed = UnknownPacket(seq=seq, frame_type=frame_type, payload=payload)
             
             if parsed:
                 packets.append(parsed)
             
-            # Remove processed frame
             self.frame_buffer = self.frame_buffer[frame_len:]
         
         return packets
     
-    def _parse_compact_status(self, seq: int, payload: bytes) -> Optional[StatusPacket]:
-        """Parse compact status packet (0x22, 12 bytes payload)."""
-        if len(payload) < 9 or payload[0] != 0x01 or payload[1] != 0x41:
+    def _parse_message(self, seq: int, payload: bytes) -> Optional[StatusPacket]:
+        """Parse message frame (0x22) - compact status."""
+        if len(payload) < 9:
             return None
         
-        stage = payload[4]  # Heating stage
-        mode = payload[5]   # Operating mode
-        sp = payload[6]     # Setpoint temperature
-        temp = payload[7]   # Current temperature
-        status = payload[8]  # Heating status
+        # Check for compact status command
+        if payload[:4] != Command.STATUS_COMPACT:
+            return None
         
-        # Validate temperature range
+        # TODO: parse using structs
+        # TODO: enums for states, modes, etc.
+        stage = payload[4] # 00 (idle), 01 (heating), (02) almost done, (03) keep warm
+        mode = payload[5] # 01 (green tea, 180f), 02 (oolong, 195f), 03 (coffee, 205f), 04 (boil, 212f), 05 (mytemp, custom)
+        sp = payload[6]
+        temp = payload[7]
+        status = payload[8]
+        
         if temp < MIN_VALID_READING_F or temp > MAX_VALID_READING_F:
             return None
         
@@ -273,29 +334,38 @@ class PacketParser:
             heating=(status != 0),
             stage=stage,
             mode=mode,
-            on_base=None,  # Not available in compact packets
+            on_base=None,
             packet_type="compact"
         )
     
-    def _parse_extended_status(self, seq: int, payload: bytes) -> Optional[StatusPacket]:
-        """Parse extended status packet (0x12, 29 bytes payload)."""
-        if len(payload) < 8 or payload[0] != 0x01 or payload[1] != 0x40:
+    def _parse_ack(self, seq: int, payload: bytes) -> Optional[StatusPacket]:
+        """Parse ACK frame (0x12) - extended status from device.
+        
+        When device sends extended status, it uses frame type 0x12.
+        """
+        if len(payload) < 8:
+            return None
+        
+        # Check for extended status command
+        if payload[:4] != Command.STATUS_EXTENDED:
             return None
         
         stage = payload[4]
         mode = payload[5]
         sp = payload[6]
         temp = payload[7]
+        # TODO: add to status packet class
+        mytemp = payload[8] # TODO if len..
+        baby_mode = payload[26] == 0x01 # TODO: if len..
+        # TODO: bytes 24 and 25 (right before baby mode) look like they might be status and show errors
         
-        # Validate temperature range
         if temp < MIN_VALID_READING_F or temp > MAX_VALID_READING_F:
             return None
         
-        # On-base detection from payload[14] (byte 20 in full packet)
+        # On-base detection at payload[14]
         on_base = None
         if len(payload) >= 15:
-            on_base_byte = payload[14]
-            on_base = (on_base_byte == 0x00)  # 0x00=on-base, 0x01=off-base
+            on_base = (payload[14] == 0x00)
         
         return StatusPacket(
             seq=seq,
