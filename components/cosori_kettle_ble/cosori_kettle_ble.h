@@ -11,6 +11,7 @@
 #ifdef USE_ESP32
 
 #include <vector>
+#include "envelope.h"
 
 namespace esphome {
 namespace cosori_kettle_ble {
@@ -69,6 +70,13 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   bool status_received_{false};
   std::vector<uint8_t> frame_buffer_;
 
+  // Chunking state for large packets (fixed-size buffer, no heap allocation)
+  static constexpr size_t SEND_BUFFER_SIZE = 256;
+  uint8_t send_buffer_[SEND_BUFFER_SIZE];
+  size_t send_buffer_len_{0};
+  size_t send_buffer_pos_{0};
+  bool waiting_for_write_ack_{false};
+
   // Kettle state
   float current_temp_f_{0.0};
   float kettle_setpoint_f_{0.0};
@@ -87,8 +95,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   enum class CommandState {
     IDLE,
     HANDSHAKE_PACKET_1,
-    HANDSHAKE_PACKET_2,
-    HANDSHAKE_PACKET_3,
+    HANDSHAKE_WAIT_CHUNKS,
     HANDSHAKE_POLL,
     START_HELLO5,
     START_SETPOINT,
@@ -128,6 +135,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   void send_f4_();
   void send_ctrl_(uint8_t seq_base);
   void send_packet_(const uint8_t *data, size_t len);
+  void send_next_chunk_();
 
   // Packet builders
   std::vector<uint8_t> build_a5_22_(uint8_t seq, const uint8_t *payload, size_t payload_len, uint8_t checksum);

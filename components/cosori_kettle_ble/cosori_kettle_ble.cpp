@@ -1,7 +1,9 @@
 #include "cosori_kettle_ble.h"
+#include "envelope.h"
 #include "esphome/core/log.h"
 #include "esphome/core/application.h"
 #include <cmath>
+#include <cstring>
 
 #ifdef USE_ESP32
 
@@ -106,6 +108,10 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       this->status_received_ = false;
       this->no_response_count_ = 0;
       this->target_setpoint_initialized_ = false;
+      // Clear chunking state
+      this->send_buffer_len_ = 0;
+      this->send_buffer_pos_ = 0;
+      this->waiting_for_write_ack_ = false;
       break;
 
     case ESP_GATTC_SEARCH_CMPL_EVT: {
@@ -150,6 +156,25 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
 
       // Mark registration sent
       this->registration_sent_ = true;
+      break;
+    }
+
+    case ESP_GATTC_WRITE_CHAR_EVT: {
+      // Handle write acknowledgment for chunked packets
+      if (this->waiting_for_write_ack_ && param->write.handle == this->tx_char_handle_) {
+        if (param->write.status == ESP_GATT_OK) {
+          // Move to next chunk position
+          this->send_buffer_pos_ += BLE_CHUNK_SIZE;
+          this->waiting_for_write_ack_ = false;
+          // Send next chunk if available
+          this->send_next_chunk_();
+        } else {
+          ESP_LOGW(TAG, "Write failed, status=%d", param->write.status);
+          this->send_buffer_len_ = 0;
+          this->send_buffer_pos_ = 0;
+          this->waiting_for_write_ack_ = false;
+        }
+      }
       break;
     }
 
@@ -311,6 +336,12 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
     return;
   }
 
+  // Check buffer size
+  if (len > SEND_BUFFER_SIZE) {
+    ESP_LOGE(TAG, "Packet too large (%zu bytes, max %zu)", len, SEND_BUFFER_SIZE);
+    return;
+  }
+
   // Log full TX packet as hex dump (only when DEBUG level is enabled)
   if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
     std::string hex_str;
@@ -323,11 +354,54 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
     ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
   }
 
+  // Copy packet to send buffer (no heap allocation)
+  memcpy(this->send_buffer_, data, len);
+  this->send_buffer_len_ = len;
+  this->send_buffer_pos_ = 0;
+  this->waiting_for_write_ack_ = false;
+
+  // Send first chunk immediately
+  this->send_next_chunk_();
+}
+
+void CosoriKettleBLE::send_next_chunk_() {
+  if (this->tx_char_handle_ == 0) {
+    ESP_LOGW(TAG, "TX characteristic not ready");
+    this->send_buffer_len_ = 0;
+    this->send_buffer_pos_ = 0;
+    this->waiting_for_write_ack_ = false;
+    return;
+  }
+
+  // Check if we have more data to send
+  if (this->send_buffer_pos_ >= this->send_buffer_len_) {
+    // All chunks sent
+    this->send_buffer_len_ = 0;
+    this->send_buffer_pos_ = 0;
+    this->waiting_for_write_ack_ = false;
+    return;
+  }
+
+  // Calculate chunk size (max 20 bytes per BLE write)
+  size_t remaining = this->send_buffer_len_ - this->send_buffer_pos_;
+  size_t chunk_size = (remaining > BLE_CHUNK_SIZE) ? BLE_CHUNK_SIZE : remaining;
+  size_t total_chunks = (this->send_buffer_len_ + BLE_CHUNK_SIZE - 1) / BLE_CHUNK_SIZE;
+  size_t current_chunk = (this->send_buffer_pos_ / BLE_CHUNK_SIZE) + 1;
+
+  // Send current chunk
+  this->waiting_for_write_ack_ = true;
+
   auto status = esp_ble_gattc_write_char(this->parent_->get_gattc_if(), this->parent_->get_conn_id(),
-                                          this->tx_char_handle_, len, const_cast<uint8_t *>(data),
+                                          this->tx_char_handle_, chunk_size,
+                                          this->send_buffer_ + this->send_buffer_pos_,
                                           ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
   if (status) {
-    ESP_LOGW(TAG, "Error sending packet, status=%d", status);
+    ESP_LOGW(TAG, "Error sending chunk %zu/%zu, status=%d", current_chunk, total_chunks, status);
+    this->send_buffer_len_ = 0;
+    this->send_buffer_pos_ = 0;
+    this->waiting_for_write_ack_ = false;
+  } else {
+    ESP_LOGD(TAG, "Sent chunk %zu/%zu (%zu bytes)", current_chunk, total_chunks, chunk_size);
   }
 }
 
@@ -337,28 +411,14 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
 
 std::vector<uint8_t> CosoriKettleBLE::build_a5_22_(uint8_t seq, const uint8_t *payload, size_t payload_len,
                                                     uint8_t checksum) {
-  std::vector<uint8_t> pkt;
-  pkt.push_back(FRAME_MAGIC);
-  pkt.push_back(FRAME_TYPE_COMMAND_A5_22);
-  pkt.push_back(seq);
-  pkt.push_back(payload_len & 0xFF);
-  pkt.push_back((payload_len >> 8) & 0xFF);
-  pkt.push_back(checksum);
-  pkt.insert(pkt.end(), payload, payload + payload_len);
-  return pkt;
+  // Use Envelope class to build packet
+  return Envelope::build(FRAME_TYPE_COMMAND_A5_22, seq, payload, payload_len);
 }
 
 std::vector<uint8_t> CosoriKettleBLE::build_a5_12_(uint8_t seq, const uint8_t *payload, size_t payload_len,
                                                     uint8_t checksum) {
-  std::vector<uint8_t> pkt;
-  pkt.push_back(FRAME_MAGIC);
-  pkt.push_back(FRAME_TYPE_COMMAND_A5_12);
-  pkt.push_back(seq);
-  pkt.push_back(payload_len & 0xFF);
-  pkt.push_back((payload_len >> 8) & 0xFF);
-  pkt.push_back(checksum);
-  pkt.insert(pkt.end(), payload, payload + payload_len);
-  return pkt;
+  // Use Envelope class to build packet
+  return Envelope::build(FRAME_TYPE_COMMAND_A5_12, seq, payload, payload_len);
 }
 
 std::vector<uint8_t> CosoriKettleBLE::make_poll_(uint8_t seq) {
@@ -784,35 +844,35 @@ void CosoriKettleBLE::process_command_state_machine_() {
       // Nothing to do
       break;
 
-    case CommandState::HANDSHAKE_PACKET_1:
+    case CommandState::HANDSHAKE_PACKET_1: {
+      // Reconstruct complete hello packet from chunks
+      std::vector<uint8_t> complete_packet;
+      
       if (this->use_custom_handshake_) {
-        this->send_packet_(this->custom_hello_1_.data(), this->custom_hello_1_.size());
+        // Concatenate custom handshake chunks
+        complete_packet.insert(complete_packet.end(), this->custom_hello_1_.begin(), this->custom_hello_1_.end());
+        complete_packet.insert(complete_packet.end(), this->custom_hello_2_.begin(), this->custom_hello_2_.end());
+        complete_packet.insert(complete_packet.end(), this->custom_hello_3_.begin(), this->custom_hello_3_.end());
       } else {
-        this->send_packet_(HELLO_MIN_1, sizeof(HELLO_MIN_1));
+        // Concatenate default handshake chunks
+        complete_packet.insert(complete_packet.end(), HELLO_MIN_1, HELLO_MIN_1 + sizeof(HELLO_MIN_1));
+        complete_packet.insert(complete_packet.end(), HELLO_MIN_2, HELLO_MIN_2 + sizeof(HELLO_MIN_2));
+        complete_packet.insert(complete_packet.end(), HELLO_MIN_3, HELLO_MIN_3 + sizeof(HELLO_MIN_3));
       }
-      this->command_state_ = CommandState::HANDSHAKE_PACKET_2;
+      
+      // Send complete packet (chunking will be handled automatically)
+      this->send_packet_(complete_packet.data(), complete_packet.size());
+      
+      // Wait for all chunks to be sent before proceeding to poll
+      this->command_state_ = CommandState::HANDSHAKE_WAIT_CHUNKS;
       this->command_state_time_ = now;
       break;
+    }
 
-    case CommandState::HANDSHAKE_PACKET_2:
-      if (elapsed >= HANDSHAKE_DELAY_MS) {
-        if (this->use_custom_handshake_) {
-          this->send_packet_(this->custom_hello_2_.data(), this->custom_hello_2_.size());
-        } else {
-          this->send_packet_(HELLO_MIN_2, sizeof(HELLO_MIN_2));
-        }
-        this->command_state_ = CommandState::HANDSHAKE_PACKET_3;
-        this->command_state_time_ = now;
-      }
-      break;
-
-    case CommandState::HANDSHAKE_PACKET_3:
-      if (elapsed >= HANDSHAKE_DELAY_MS) {
-        if (this->use_custom_handshake_) {
-          this->send_packet_(this->custom_hello_3_.data(), this->custom_hello_3_.size());
-        } else {
-          this->send_packet_(HELLO_MIN_3, sizeof(HELLO_MIN_3));
-        }
+    case CommandState::HANDSHAKE_WAIT_CHUNKS:
+      // Wait for all chunks to be sent (waiting_for_write_ack_ will be false when done)
+      if (!this->waiting_for_write_ack_ && this->send_buffer_len_ == 0) {
+        // All chunks sent, proceed to poll
         this->command_state_ = CommandState::HANDSHAKE_POLL;
         this->command_state_time_ = now;
       }
