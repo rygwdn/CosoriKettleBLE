@@ -16,16 +16,17 @@ Protocol appears to be:
 ---------------------------------------------------
 
 v1 commands:
-- start heating: 01F0 A300 yyyy bb zzzz
-- delay start: 01F1 A300 xxxx yyyy bb zzzz
+- start heating:  01F0 A300 yyyy bb zzzz
+- delay start:    01F1 A300 xxxx yyyy bb zzzz
+- set "hold temp" 01F2 A300 00bb zzzz
   xxxx: delay in seconds in big-endian (10_0E == 3600s == 60 minutes)
   yyyy: mode (0300 for coffee, 0400 for boil, 0500 for "mytemp", etc.)
   bb: enable hold (01 on, 00 off)
   zzzz: hold time in seconds in big-endian (34_08 == 2100s == 35 mins)
+- set mytemp temp: 01F3 A300 {temp}
 - stop: 01F4 A300
-- set mytemp temp: 01F3_A300_{temp}
 - set mytemp baby-formula mode: 01F5_A300_{0 or 1}
-- ?? sent from device when it finished..: 01F7 A300 xx
+- sent from device when it finished..: 01F7 A300 xx
   xx: 20 = done (might hold), 21 = hold done
 - hello: 0181 D100 {bytes}
   bytes: 32 bytes which is 16 byte key encoded as ascii hex. appears to be tied to the controller device/app or the account

@@ -33,7 +33,7 @@ static constexpr uint8_t MODE_BOIL = 0x04;
 static constexpr uint8_t MODE_HEAT = 0x06;
 
 // Timing constants (milliseconds)
-static constexpr uint32_t HANDSHAKE_DELAY_MS = 80;
+static constexpr uint32_t HANDSHAKE_TIMEOUT_MS = 1000;
 static constexpr uint32_t PRE_SETPOINT_DELAY_MS = 60;
 static constexpr uint32_t POST_SETPOINT_DELAY_MS = 100;
 static constexpr uint32_t CONTROL_DELAY_MS = 50;
@@ -85,6 +85,25 @@ void CosoriKettleBLE::dump_config() {
   LOG_SWITCH("  ", "Heating Control", this->heating_switch_);
   LOG_SWITCH("  ", "BLE Connection", this->ble_connection_switch_);
   LOG_SWITCH("  ", "Baby Formula", this->baby_formula_switch_);
+}
+
+void CosoriKettleBLE::update() {
+  // Process command state machine
+  this->process_command_state_machine_();
+
+  // Track online status (increment counter if no status received)
+  if (this->is_connected()) {
+    this->track_online_status_();
+
+    // Send periodic status requests if connected and idle
+    if (this->command_state_ == CommandState::IDLE && this->status_received_) {
+      uint32_t now = millis();
+      if (now - this->last_poll_time_ >= this->get_update_interval()) {
+        this->send_status_request_();
+        this->last_poll_time_ = now;
+      }
+    }
+  }
 }
 
 void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
@@ -227,7 +246,7 @@ void CosoriKettleBLE::send_hello_() {
   
   // Start handshake state machine instead of blocking
   ESP_LOGI(TAG, "Starting registration handshake");
-  this->command_state_ = CommandState::HANDSHAKE_PACKET_1;
+  this->command_state_ = CommandState::HANDSHAKE_START;
   this->command_state_time_ = millis();
 }
 
@@ -242,25 +261,6 @@ void CosoriKettleBLE::send_status_request_() {
   ESP_LOGV(TAG, "Sending POLL (seq=%02x)", seq);
   if (!this->send_command(seq, payload, sizeof(payload))) {
     ESP_LOGW(TAG, "Failed to send POLL");
-  }
-}
-
-void CosoriKettleBLE::send_set_hold_time(uint16_t seconds) {
-  if (!this->is_connected()) {
-    ESP_LOGW(TAG, "Cannot send set hold time: not connected");
-    return;
-  }
-  
-  uint8_t seq = this->next_tx_seq_();
-  // Command: 01F2A300 + hold_time (2 bytes big-endian)
-  uint8_t payload[] = {
-    this->protocol_version_, 0xF2, 0xA3, 0x00,
-    static_cast<uint8_t>((seconds >> 8) & 0xFF),  // High byte
-    static_cast<uint8_t>(seconds & 0xFF)           // Low byte
-  };
-  ESP_LOGD(TAG, "Sending set hold time %u seconds (seq=%02x)", seconds, seq);
-  if (!this->send_command(seq, payload, sizeof(payload))) {
-    ESP_LOGW(TAG, "Failed to send set hold time");
   }
 }
 
@@ -293,12 +293,33 @@ void CosoriKettleBLE::send_set_baby_formula(bool enabled) {
   
   uint8_t seq = this->next_tx_seq_();
   // Command: 01F5A300 + enabled (1 byte: 0x01=enabled, 0x00=disabled)
-  uint8_t payload[] = {this->protocol_version_, 0xF5, 0xA3, 0x00, enabled ? 0x01 : 0x00};
+  uint8_t payload[] = {this->protocol_version_, 0xF5, 0xA3, 0x00, static_cast<uint8_t>(enabled ? 0x01 : 0x00)};
   ESP_LOGD(TAG, "Sending set baby formula %s (seq=%02x)", enabled ? "enabled" : "disabled", seq);
   if (!this->send_command(seq, payload, sizeof(payload))) {
     ESP_LOGW(TAG, "Failed to send set baby formula");
   }
 }
+
+void CosoriKettleBLE::send_set_hold_time(uint16_t seconds) {
+  if (!this->is_connected()) {
+    ESP_LOGW(TAG, "Cannot send set hold time: not connected");
+    return;
+  }
+  
+  uint8_t seq = this->next_tx_seq_();
+  // Command: 01F2A300 + hold_time (2 bytes big-endian)
+  uint8_t payload[] = {
+    this->protocol_version_, 0xF2, 0xA3, 0x00,
+    0x00, static_cast<uint8_t>((seconds > 0) ? 0x01 : 0x00), // enable hold
+    static_cast<uint8_t>((seconds >> 8) & 0xFF),  // High byte
+    static_cast<uint8_t>(seconds & 0xFF)           // Low byte
+  };
+  ESP_LOGD(TAG, "Sending set hold time %u seconds (seq=%02x)", seconds, seq);
+  if (!this->send_command(seq, payload, sizeof(payload))) {
+    ESP_LOGW(TAG, "Failed to send set hold time");
+  }
+}
+
 
 // TODO: this is "start heating" with a hold time of 60 minutes
 void CosoriKettleBLE::send_set_mode(uint8_t mode, uint8_t temp_f) {
@@ -308,7 +329,16 @@ void CosoriKettleBLE::send_set_mode(uint8_t mode, uint8_t temp_f) {
   }
   
   uint8_t seq = this->next_tx_seq_();
-  uint8_t payload[] = {this->protocol_version_, 0xF0, 0xA3, 0x00, mode, temp_f, 0x01, 0x10, 0x0E};
+  uint8_t payload[] = {
+    // Command
+    this->protocol_version_, 0xF0, 0xA3, 0x00,
+    // Payload
+    mode, temp_f,
+    // Hold time
+    static_cast<uint8_t>((this->hold_time_seconds_ > 0) ? 0x01 : 0x00), // enable hold
+    static_cast<uint8_t>((this->hold_time_seconds_ >> 8) & 0xFF),  // High byte
+    static_cast<uint8_t>(this->hold_time_seconds_ & 0xFF)           // Low byte
+  };
   ESP_LOGD(TAG, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
   if (!this->send_command(seq, payload, sizeof(payload))) {
     ESP_LOGW(TAG, "Failed to send SETPOINT");
@@ -517,10 +547,17 @@ void CosoriKettleBLE::process_frame_buffer_() {
     this->last_rx_seq_ = frame.seq;
 
     // TODO: parse based on frame type AND command
-    if (frame.frame_type == MESSAGE_HEADER_TYPE) {
+    if (frame.frame_type == MESSAGE_HEADER_TYPE && frame.payload[1] == 0x41) {
       this->parse_compact_status_(frame.payload, frame.payload_len);
-    } else if (frame.frame_type == ACK_HEADER_TYPE) {
-      this->parse_extended_status_(frame.payload, frame.payload_len);
+    } else if (frame.frame_type == ACK_HEADER_TYPE && frame.payload[1] == 0x40) {
+      this->parse_status_ack_(frame.payload, frame.payload_len);
+    } else if (frame.frame_type == ACK_HEADER_TYPE && !this->waiting_for_ack_complete_ && this->waiting_for_ack_seq_ == frame.seq) {
+      this->waiting_for_ack_complete_ = true;
+      if (frame.payload_len > 4) {
+        this->last_ack_error_code_ = static_cast<uint8_t>(frame.payload[4]);
+      } else {
+        this->last_ack_error_code_ = 0;
+      }
     }
   }
   
@@ -530,7 +567,7 @@ void CosoriKettleBLE::process_frame_buffer_() {
 
 void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) {
   // Compact status: 01 41 40 00 <stage> <mode> <sp> <temp> <status> ...
-  if (len < 9 || payload[0] != 0x01 || payload[1] != 0x41)
+  if (len < 9 || payload[1] != 0x41)
     return;
 
   uint8_t stage = payload[4];     // Heating stage
@@ -557,11 +594,11 @@ void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) 
   this->update_entities_();
 }
 
-void CosoriKettleBLE::parse_extended_status_(const uint8_t *payload, size_t len) {
+void CosoriKettleBLE::parse_status_ack_(const uint8_t *payload, size_t len) {
   // Extended status: 01 40 40 00 <stage> <mode> <sp> <temp> ... <on_base> ...
   // NOTE: Extended packets (A512 = A5 + 12, len=29) contain on-base detection at payload[14] (byte 20)
   // Compact packets (A522 = A5 + 22, len=12) do NOT contain on-base information
-  if (len < 8 || payload[0] != 0x01 || payload[1] != 0x40)
+  if (len < 8 || payload[1] != 0x40)
     return;
 
   uint8_t stage = payload[4];
@@ -663,10 +700,12 @@ void CosoriKettleBLE::set_target_setpoint(float temp_f) {
   
   // Update number entity if it exists
   if (this->target_setpoint_number_ != nullptr) {
-    // TODO: update this when the device reports a change too
     this->target_setpoint_number_->publish_state(temp_f);
   }
 }
+
+// TODO: add "register" command based on "hello" that sends the registration command (0x81 instead of 0x80)
+// TODO: add - delay start: 01F1 A300 {2b delay in seconds} {set mode payload}
 
 void CosoriKettleBLE::set_hold_time(float seconds) {
   // Clamp to valid range (0-65535 seconds)
@@ -746,13 +785,14 @@ void CosoriKettleBLE::start_heating() {
 
   uint8_t temp_f = static_cast<uint8_t>(std::round(this->target_setpoint_f_));
   uint8_t mode = (temp_f == MAX_TEMP_F) ? MODE_BOIL : MODE_HEAT;
+  // TODO: need to handle v1 modes here since it doesn't support MODE_HEAT? use existing mode if available, otherwise set mytemp first and use that
 
   ESP_LOGI(TAG, "Starting kettle at %.0f°F", this->target_setpoint_f_);
 
   // Store parameters and start state machine
   this->pending_temp_f_ = temp_f;
   this->pending_mode_ = mode;
-  this->command_state_ = CommandState::START_HELLO5;
+  this->command_state_ = CommandState::HEAT_START;
   this->command_state_time_ = millis();
 }
 
@@ -765,7 +805,7 @@ void CosoriKettleBLE::stop_heating() {
   ESP_LOGI(TAG, "Stopping kettle");
 
   // Start stop sequence state machine
-  this->command_state_ = CommandState::STOP_PRE_F4;
+  this->command_state_ = CommandState::STOP;
   this->command_state_time_ = millis();
 }
 
@@ -789,7 +829,6 @@ void CosoriKettleBLE::enable_ble_connection(bool enable) {
 }
 
 void CosoriKettleBLE::set_registration_key(const std::array<uint8_t, 16> &key) {
-  // TODO: need publish_state?
   this->registration_key_ = key;
   this->registration_key_set_ = true;
   ESP_LOGD(TAG, "Registration key set");
@@ -1007,7 +1046,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
       // Nothing to do
       break;
 
-    case CommandState::HANDSHAKE_PACKET_1: {
+    case CommandState::HANDSHAKE_START: {
       uint8_t payload[36];
       payload[0] = this->protocol_version_; // Protocol version (0 or 1)
       payload[1] = 0x81;
@@ -1023,11 +1062,15 @@ void CosoriKettleBLE::process_command_state_machine_() {
       }
       
       // Send hello command using send_command (seq=0 for hello)
-      if (!this->send_command(0, payload, sizeof(payload))) {
+      const uint8_t sequence_number = 0;
+      if (!this->send_command(sequence_number, payload, sizeof(payload))) {
         ESP_LOGW(TAG, "Failed to send hello command");
         this->command_state_ = CommandState::IDLE;
         break;
       }
+
+      this->waiting_for_ack_seq_ = sequence_number;
+      this->waiting_for_ack_complete_ = true;
       
       // Wait for all chunks to be sent before proceeding to poll
       this->command_state_ = CommandState::HANDSHAKE_WAIT_CHUNKS;
@@ -1036,9 +1079,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
     }
 
     case CommandState::HANDSHAKE_WAIT_CHUNKS:
-      // Wait for all chunks to be sent (waiting_for_write_ack_ will be false when done)
       if (!this->waiting_for_write_ack_ && this->send_chunk_index_ >= this->send_total_chunks_) {
-        // All chunks sent, proceed to poll
         // TODO: add wait for ack before poll
         this->command_state_ = CommandState::HANDSHAKE_POLL;
         this->command_state_time_ = now;
@@ -1046,70 +1087,69 @@ void CosoriKettleBLE::process_command_state_machine_() {
       break;
 
     case CommandState::HANDSHAKE_POLL:
-      if (elapsed >= HANDSHAKE_DELAY_MS) {
+      if (elapsed >= HANDSHAKE_TIMEOUT_MS || !this->waiting_for_ack_complete_) {
+        if (this->last_ack_error_code_ != 0) {
+          ESP_LOGE(TAG, "Error in handshake: %d", this->last_ack_error_code_);
+          this->command_state_ = CommandState::IDLE;
+          break;
+        }
+
         this->send_status_request_();
         this->command_state_ = CommandState::IDLE;
         ESP_LOGI(TAG, "Registration handshake complete");
       }
       break;
 
-    case CommandState::START_HELLO5:
-      // Use default hold time of 60 minutes (3600 seconds) for legacy compatibility
-      this->send_set_hold_time(3600);
-      this->command_state_ = CommandState::START_SETPOINT;
-      this->command_state_time_ = now;
-      break;
-
-    case CommandState::START_SETPOINT:
+    case CommandState::HEAT_START:
       if (elapsed >= PRE_SETPOINT_DELAY_MS) {
         this->send_set_mode(this->pending_mode_, this->pending_temp_f_);
-        this->command_state_ = CommandState::START_WAIT_STATUS;
+        this->command_state_ = CommandState::HEAT_POLL;
         this->command_state_time_ = now;
       }
       break;
 
-    case CommandState::START_WAIT_STATUS:
+    case CommandState::HEAT_POLL:
       if (elapsed >= POST_SETPOINT_DELAY_MS) {
         // Proceed to control even if no status (timeout after POST_SETPOINT_DELAY_MS)
         uint8_t seq_base = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
         this->send_request_compact_status_(seq_base);
-        this->command_state_ = CommandState::START_CTRL;
+        this->command_state_ = CommandState::HEAT_POLL_REPEAT;
         this->command_state_time_ = now;
       }
       break;
 
-    case CommandState::START_CTRL:
+    case CommandState::HEAT_POLL_REPEAT:
       if (elapsed >= CONTROL_DELAY_MS) {
         uint8_t seq_ack = this->next_tx_seq_();
         this->send_request_compact_status_(seq_ack);
-        this->command_state_ = CommandState::START_CTRL_REINFORCE;
+        this->command_state_ = CommandState::HEAT_COMPLETE;
         this->command_state_time_ = now;
       }
       break;
 
-    case CommandState::START_CTRL_REINFORCE:
+    case CommandState::HEAT_COMPLETE:
       if (elapsed >= CONTROL_DELAY_MS) {
         this->command_state_ = CommandState::IDLE;
         ESP_LOGD(TAG, "Start heating sequence complete");
       }
       break;
 
-    case CommandState::STOP_PRE_F4:
+    case CommandState::STOP:
       this->send_stop();
-      this->command_state_ = CommandState::STOP_CTRL;
+      this->command_state_ = CommandState::STOP_POLL;
       this->command_state_time_ = now;
       break;
 
-    case CommandState::STOP_CTRL:
+    case CommandState::STOP_POLL:
       if (elapsed >= CONTROL_DELAY_MS) {
         uint8_t seq_ctrl = (this->last_status_seq_ != 0) ? this->last_status_seq_ : this->last_rx_seq_;
         this->send_request_compact_status_(seq_ctrl);
-        this->command_state_ = CommandState::STOP_POST_F4;
+        this->command_state_ = CommandState::STOP_REPEAT;
         this->command_state_time_ = now;
       }
       break;
 
-    case CommandState::STOP_POST_F4:
+    case CommandState::STOP_REPEAT:
       if (elapsed >= CONTROL_DELAY_MS) {
         this->send_stop();
         this->command_state_ = CommandState::IDLE;

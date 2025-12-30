@@ -106,10 +106,13 @@ All packets follow this format:
 
 ### Checksum Calculation
 
-The checksum is calculated as:
+<!-- TODO: is this accurate for v0 packets? -->
+The v0 checksum is calculated as:
 ```
 checksum = (magic + type + seq + len_lo + len_hi) & 0xFF
 ```
+
+The v1 checksum is calculated by setting the checksum byte to 0x01, set `checksum = 0` then for each byte, `checksum = (checksum - byte) & 0xFF`
 
 ## Protocol Versions
 

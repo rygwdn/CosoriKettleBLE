@@ -76,6 +76,9 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   // Protocol state
   uint8_t last_rx_seq_{0};
   uint8_t tx_seq_{0};
+  uint8_t last_ack_error_code_{0};
+  bool waiting_for_ack_complete_{false};
+  uint8_t waiting_for_ack_seq_{0};
   uint8_t last_status_seq_{0};
   bool status_received_{false};
   
@@ -112,17 +115,16 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   // Command sequence state machine
   enum class CommandState {
     IDLE,
-    HANDSHAKE_PACKET_1,
+    HANDSHAKE_START,
     HANDSHAKE_WAIT_CHUNKS,
     HANDSHAKE_POLL,
-    START_HELLO5,
-    START_SETPOINT,
-    START_WAIT_STATUS,
-    START_CTRL,
-    START_CTRL_REINFORCE,
-    STOP_PRE_F4,
-    STOP_CTRL,
-    STOP_POST_F4
+    HEAT_START,
+    HEAT_POLL,
+    HEAT_POLL_REPEAT,
+    HEAT_COMPLETE,
+    STOP,
+    STOP_POLL,
+    STOP_REPEAT
   };
   
   CommandState command_state_{CommandState::IDLE};
@@ -167,7 +169,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   // Frame parsing
   void process_frame_buffer_();
   void parse_compact_status_(const uint8_t *payload, size_t len);
-  void parse_extended_status_(const uint8_t *payload, size_t len);
+  void parse_status_ack_(const uint8_t *payload, size_t len);
 
   // State management
   uint8_t next_tx_seq_();
