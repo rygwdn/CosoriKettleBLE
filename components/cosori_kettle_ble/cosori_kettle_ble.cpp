@@ -12,6 +12,10 @@ namespace cosori_kettle_ble {
 
 static const char *const TAG = "cosori_kettle_ble";
 
+// Static buffer instances
+Envelope CosoriKettleBLE::send_buffer;
+Envelope CosoriKettleBLE::recv_buffer;
+
 // Buffer size limits
 static constexpr size_t MAX_FRAME_BUFFER_SIZE = 512;
 static constexpr size_t MAX_PAYLOAD_SIZE = 256;
@@ -103,14 +107,14 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       this->rx_char_handle_ = 0;
       this->tx_char_handle_ = 0;
       this->notify_handle_ = 0;
-      this->frame_buffer_.clear();
+      recv_buffer.clear();
       this->registration_sent_ = false;
       this->status_received_ = false;
       this->no_response_count_ = 0;
       this->target_setpoint_initialized_ = false;
       // Clear chunking state
-      this->send_chunks_.clear();
       this->send_chunk_index_ = 0;
+      this->send_total_chunks_ = 0;
       this->waiting_for_write_ack_ = false;
       break;
 
@@ -170,8 +174,8 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
           this->send_next_chunk_();
         } else {
           ESP_LOGW(TAG, "Write failed, status=%d", param->write.status);
-          this->send_chunks_.clear();
           this->send_chunk_index_ = 0;
+          this->send_total_chunks_ = 0;
           this->waiting_for_write_ack_ = false;
         }
       }
@@ -195,15 +199,17 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       }
 
       // Check buffer size limit before appending
-      if (this->frame_buffer_.size() + param->notify.value_len > MAX_FRAME_BUFFER_SIZE) {
+      if (recv_buffer.size() + param->notify.value_len > MAX_FRAME_BUFFER_SIZE) {
         ESP_LOGW(TAG, "Frame buffer overflow (%zu + %d > %zu), clearing buffer",
-                 this->frame_buffer_.size(), param->notify.value_len, MAX_FRAME_BUFFER_SIZE);
-        this->frame_buffer_.clear();
+                 recv_buffer.size(), param->notify.value_len, MAX_FRAME_BUFFER_SIZE);
+        recv_buffer.clear();
       }
 
-      // Append to frame buffer
-      this->frame_buffer_.insert(this->frame_buffer_.end(), param->notify.value,
-                                 param->notify.value + param->notify.value_len);
+      // Append to receive buffer
+      if (!recv_buffer.append(param->notify.value, param->notify.value_len)) {
+        ESP_LOGW(TAG, "Failed to append to receive buffer, clearing");
+        recv_buffer.clear();
+      }
 
       // Process complete frames
       this->process_frame_buffer_();
@@ -276,7 +282,6 @@ void CosoriKettleBLE::send_registration_() {
   this->command_state_time_ = millis();
 }
 
-// TODO: add Envelope class and use it
 // TODO: add ProtocolV1 class and use it
 // TODO: add ProtocolV0 class and use it
 
@@ -359,13 +364,17 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
     ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
   }
 
-  // Convert to vector for Envelope::chunk()
-  std::vector<uint8_t> packet(data, data + len);
+  // Copy data to send_buffer
+  send_buffer.clear();
+  if (!send_buffer.append(data, len)) {
+    ESP_LOGW(TAG, "Failed to append data to send buffer");
+    return;
+  }
   
-  // Use Envelope::chunk() to split packet into BLE chunks
-  this->send_chunks_ = Envelope::chunk(packet);
+  // Calculate total chunks needed
+  this->send_total_chunks_ = send_buffer.get_chunk_count();
   
-  if (this->send_chunks_.empty()) {
+  if (this->send_total_chunks_ == 0) {
     ESP_LOGW(TAG, "No chunks to send");
     return;
   }
@@ -381,40 +390,49 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
 void CosoriKettleBLE::send_next_chunk_() {
   if (this->tx_char_handle_ == 0) {
     ESP_LOGW(TAG, "TX characteristic not ready");
-    this->send_chunks_.clear();
     this->send_chunk_index_ = 0;
+    this->send_total_chunks_ = 0;
     this->waiting_for_write_ack_ = false;
     return;
   }
 
   // Check if we have more chunks to send
-  if (this->send_chunk_index_ >= this->send_chunks_.size()) {
+  if (this->send_chunk_index_ >= this->send_total_chunks_) {
     // All chunks sent
-    this->send_chunks_.clear();
     this->send_chunk_index_ = 0;
+    this->send_total_chunks_ = 0;
     this->waiting_for_write_ack_ = false;
     return;
   }
 
-  // Get current chunk
-  const auto &chunk = this->send_chunks_[this->send_chunk_index_];
-  size_t total_chunks = this->send_chunks_.size();
+  // Get current chunk data and size
+  size_t chunk_size = 0;
+  const uint8_t *chunk_data = send_buffer.get_chunk_data(this->send_chunk_index_, chunk_size);
+  
+  if (chunk_data == nullptr || chunk_size == 0) {
+    ESP_LOGW(TAG, "Invalid chunk data at index %zu", this->send_chunk_index_);
+    this->send_chunk_index_ = 0;
+    this->send_total_chunks_ = 0;
+    this->waiting_for_write_ack_ = false;
+    return;
+  }
+
   size_t current_chunk = this->send_chunk_index_ + 1;
 
   // Send current chunk
   this->waiting_for_write_ack_ = true;
 
   auto status = esp_ble_gattc_write_char(this->parent_->get_gattc_if(), this->parent_->get_conn_id(),
-                                          this->tx_char_handle_, chunk.size(),
-                                          const_cast<uint8_t *>(chunk.data()),
+                                          this->tx_char_handle_, chunk_size,
+                                          const_cast<uint8_t *>(chunk_data),
                                           ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
   if (status) {
-    ESP_LOGW(TAG, "Error sending chunk %zu/%zu, status=%d", current_chunk, total_chunks, status);
-    this->send_chunks_.clear();
+    ESP_LOGW(TAG, "Error sending chunk %zu/%zu, status=%d", current_chunk, this->send_total_chunks_, status);
     this->send_chunk_index_ = 0;
+    this->send_total_chunks_ = 0;
     this->waiting_for_write_ack_ = false;
   } else {
-    ESP_LOGD(TAG, "Sent chunk %zu/%zu (%zu bytes)", current_chunk, total_chunks, chunk.size());
+    ESP_LOGD(TAG, "Sent chunk %zu/%zu (%zu bytes)", current_chunk, this->send_total_chunks_, chunk_size);
   }
 }
 
@@ -424,14 +442,22 @@ void CosoriKettleBLE::send_next_chunk_() {
 
 std::vector<uint8_t> CosoriKettleBLE::build_a5_22_(uint8_t seq, const uint8_t *payload, size_t payload_len,
                                                     uint8_t checksum) {
-  // Use Envelope class to build packet
-  return Envelope::build(FRAME_TYPE_COMMAND_A5_22, seq, payload, payload_len);
+  // Use send_buffer to build packet
+  if (!send_buffer.build(FRAME_TYPE_COMMAND_A5_22, seq, payload, payload_len)) {
+    ESP_LOGW(TAG, "Failed to build A5_22 packet");
+    return std::vector<uint8_t>();
+  }
+  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
 }
 
 std::vector<uint8_t> CosoriKettleBLE::build_a5_12_(uint8_t seq, const uint8_t *payload, size_t payload_len,
                                                     uint8_t checksum) {
-  // Use Envelope class to build packet
-  return Envelope::build(FRAME_TYPE_COMMAND_A5_12, seq, payload, payload_len);
+  // Use send_buffer to build packet
+  if (!send_buffer.build(FRAME_TYPE_COMMAND_A5_12, seq, payload, payload_len)) {
+    ESP_LOGW(TAG, "Failed to build A5_12 packet");
+    return std::vector<uint8_t>();
+  }
+  return std::vector<uint8_t>(send_buffer.data(), send_buffer.data() + send_buffer.size());
 }
 
 std::vector<uint8_t> CosoriKettleBLE::make_poll_(uint8_t seq) {
@@ -470,72 +496,30 @@ std::vector<uint8_t> CosoriKettleBLE::make_ctrl_(uint8_t seq) {
 
 void CosoriKettleBLE::process_frame_buffer_() {
   while (true) {
-    // TODO: parse with envelope class
-
-    // Find frame start (FRAME_MAGIC)
-    size_t start_idx = 0;
-    while (start_idx < this->frame_buffer_.size() && this->frame_buffer_[start_idx] != FRAME_MAGIC) {
-      start_idx++;
-    }
-
-    // Discard any bytes before frame start
-    if (start_idx > 0) {
-      this->frame_buffer_.erase(this->frame_buffer_.begin(), this->frame_buffer_.begin() + start_idx);
-    }
-
-    // Need at least 6 bytes for header
-    if (this->frame_buffer_.size() < 6)
+    // Process next frame using Envelope's built-in validation and position management
+    auto frame = recv_buffer.process_next_frame(MAX_PAYLOAD_SIZE);
+    
+    // If no valid frame found, break (either no more frames or incomplete frame)
+    if (!frame.valid) {
       break;
-
-    // Parse header
-    uint8_t magic = this->frame_buffer_[0];
-    uint8_t frame_type = this->frame_buffer_[1];
-    uint8_t seq = this->frame_buffer_[2];
-    uint16_t payload_len = this->frame_buffer_[3] | (this->frame_buffer_[4] << 8);
-    uint8_t received_checksum = this->frame_buffer_[5];
-    size_t frame_len = 6 + payload_len;
-
-    // Validate payload length
-    if (payload_len > MAX_PAYLOAD_SIZE) {
-      ESP_LOGW(TAG, "Invalid payload length: %d (max %zu), discarding frame", payload_len, MAX_PAYLOAD_SIZE);
-      this->frame_buffer_.erase(this->frame_buffer_.begin(), this->frame_buffer_.begin() + 1);
-      continue;
     }
-
-    // Wait for complete frame
-    if (this->frame_buffer_.size() < frame_len)
-      break;
-
-    // Validate checksum
-    uint8_t calculated_checksum = (magic + frame_type + seq + 
-                                   this->frame_buffer_[3] + this->frame_buffer_[4]) & 0xFF;
-    if (received_checksum != calculated_checksum) {
-      ESP_LOGW(TAG, "Checksum mismatch: received=0x%02x, calculated=0x%02x, discarding frame",
-               received_checksum, calculated_checksum);
-      // Discard this frame start and continue searching
-      this->frame_buffer_.erase(this->frame_buffer_.begin(), this->frame_buffer_.begin() + 1);
-      continue;
-    }
-
-    // Extract payload
-    const uint8_t *payload = this->frame_buffer_.data() + 6;
 
     // Update last RX sequence
-    this->last_rx_seq_ = seq;
+    this->last_rx_seq_ = frame.seq;
 
     // TODO: parse based on frame type AND command
     // Parse based on frame type
-    if (frame_type == FRAME_TYPE_COMPACT_STATUS) {
+    if (frame.frame_type == FRAME_TYPE_COMPACT_STATUS) {
       // Compact status (A5 22)
-      this->parse_compact_status_(payload, payload_len);
-    } else if (frame_type == FRAME_TYPE_EXTENDED_STATUS) {
+      this->parse_compact_status_(frame.payload, frame.payload_len);
+    } else if (frame.frame_type == FRAME_TYPE_EXTENDED_STATUS) {
       // Extended status (A5 12)
-      this->parse_extended_status_(payload, payload_len);
+      this->parse_extended_status_(frame.payload, frame.payload_len);
     }
-
-    // Remove processed frame
-    this->frame_buffer_.erase(this->frame_buffer_.begin(), this->frame_buffer_.begin() + frame_len);
   }
+  
+  // Compact buffer periodically to free up space at the beginning
+  recv_buffer.compact();
 }
 
 void CosoriKettleBLE::parse_compact_status_(const uint8_t *payload, size_t len) {
@@ -887,7 +871,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
 
     case CommandState::HANDSHAKE_WAIT_CHUNKS:
       // Wait for all chunks to be sent (waiting_for_write_ack_ will be false when done)
-      if (!this->waiting_for_write_ack_ && this->send_chunks_.empty()) {
+      if (!this->waiting_for_write_ack_ && this->send_chunk_index_ >= this->send_total_chunks_) {
         // All chunks sent, proceed to poll
         this->command_state_ = CommandState::HANDSHAKE_POLL;
         this->command_state_time_ = now;
