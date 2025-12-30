@@ -53,6 +53,9 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
 
   // Registration key configuration (16-byte key for hello/reconnect)
   void set_registration_key(const std::array<uint8_t, 16> &key);
+  
+  // Protocol version configuration (0 or 1)
+  void set_protocol_version(uint8_t version) { protocol_version_ = version; }
 
   // Climate interface
   climate::ClimateTraits traits() override;
@@ -117,6 +120,9 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   // Registration key (16 bytes) for hello/reconnect command
   std::array<uint8_t, 16> registration_key_{};
   bool registration_key_set_{false};
+  
+  // Protocol version (0 or 1)
+  uint8_t protocol_version_{0};
 
   // Entity pointers
   sensor::Sensor *temperature_sensor_{nullptr};

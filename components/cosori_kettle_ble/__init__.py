@@ -10,6 +10,7 @@ AUTO_LOAD = ["sensor", "binary_sensor", "number", "switch", "climate"]
 
 CONF_COSORI_KETTLE_BLE_ID = "cosori_kettle_ble_id"
 CONF_REGISTRATION_KEY = "registration_key"
+CONF_PROTOCOL_VERSION = "protocol_version"
 
 cosori_kettle_ble_ns = cg.esphome_ns.namespace("cosori_kettle_ble")
 CosoriKettleBLE = cosori_kettle_ble_ns.class_(
@@ -44,6 +45,7 @@ CONFIG_SCHEMA = (
         {
             cv.GenerateID(): cv.declare_id(CosoriKettleBLE),
             cv.Required(CONF_REGISTRATION_KEY): validate_registration_key,
+            cv.Optional(CONF_PROTOCOL_VERSION, default=0): cv.one_of(0, 1, int=True),
         }
     )
     .extend(cv.polling_component_schema("1s"))
@@ -69,3 +71,7 @@ async def to_code(config):
     byte_list = ','.join(str(b) for b in key_bytes)
     key_array = cg.RawExpression(f"std::array<uint8_t, 16>{{{{{byte_list}}}}}")
     cg.add(var.set_registration_key(key_array))
+    
+    # Set protocol version
+    protocol_version = config.get(CONF_PROTOCOL_VERSION, 0)
+    cg.add(var.set_protocol_version(protocol_version))

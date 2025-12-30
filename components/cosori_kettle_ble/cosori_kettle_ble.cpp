@@ -72,6 +72,7 @@ void CosoriKettleBLE::setup() {
 void CosoriKettleBLE::dump_config() {
   ESP_LOGCONFIG(TAG, "Cosori Kettle BLE:");
   ESP_LOGCONFIG(TAG, "  MAC Address: %s", this->parent_->address_str());
+  ESP_LOGCONFIG(TAG, "  Protocol Version: %d", this->protocol_version_);
   ESP_LOGCONFIG(TAG, "  Update Interval: %ums", this->get_update_interval());
   LOG_BINARY_SENSOR("  ", "On Base", this->on_base_binary_sensor_);
   LOG_BINARY_SENSOR("  ", "Heating", this->heating_binary_sensor_);
@@ -136,6 +137,7 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       if (status) {
         ESP_LOGW(TAG, "esp_ble_gattc_register_for_notify failed, status=%d", status);
       }
+      
       break;
     }
 
@@ -209,32 +211,33 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
   }
 }
 
-// TODO: what calls this?
-void CosoriKettleBLE::update() {
-  this->track_online_status_();
+// // TODO: what calls this?
+// void CosoriKettleBLE::update() {
+//   this->track_online_status_();
 
-  if (!this->ble_enabled_) {
-    return;
-  }
+//   if (!this->ble_enabled_) {
+//     return;
+//   }
 
-  if (this->node_state != esp32_ble_tracker::ClientState::ESTABLISHED) {
-    ESP_LOGD(TAG, "Not connected, skipping poll");
-    return;
-  }
+//   if (this->node_state != esp32_ble_tracker::ClientState::ESTABLISHED) {
+//     ESP_LOGD(TAG, "Not connected, skipping poll");
+//     return;
+//   }
 
-  if (!this->registration_sent_) {
-    ESP_LOGD(TAG, "Registration not complete, skipping poll");
-    return;
-  }
+//   if (!this->registration_sent_) {
+//     ESP_LOGD(TAG, "Registration not complete, skipping poll");
+//     return;
+//   }
 
-  // Process command state machine
-  this->process_command_state_machine_();
+//   // Process command state machine
+//   this->process_command_state_machine_();
 
-  // Send poll if not in the middle of a command sequence
-  if (this->command_state_ == CommandState::IDLE) {
-    this->send_poll_();
-  }
-}
+//   // Send poll if not in the middle of a command sequence
+//   // TODO: use if state is idle then state -> poll
+//   if (this->command_state_ == CommandState::IDLE) {
+//     this->send_poll_();
+//   }
+// }
 
 // ============================================================================
 // Protocol Implementation - Packet Sending
@@ -258,9 +261,6 @@ void CosoriKettleBLE::send_registration_() {
   this->command_state_ = CommandState::HANDSHAKE_PACKET_1;
   this->command_state_time_ = millis();
 }
-
-// TODO: add ProtocolV1 class and use it
-// TODO: add ProtocolV0 class and use it
 
 bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t payload_len, bool is_ack) {
   if (this->tx_char_handle_ == 0) {
@@ -331,6 +331,7 @@ void CosoriKettleBLE::send_poll_() {
   }
 }
 
+// TODO: this is "set hold time" 60 minutes
 void CosoriKettleBLE::send_hello5_() {
   if (!this->is_connected()) {
     ESP_LOGW(TAG, "Cannot send HELLO5: not connected");
@@ -345,6 +346,7 @@ void CosoriKettleBLE::send_hello5_() {
   }
 }
 
+// TODO: this is "start heating" with a hold time of 60 minutes
 void CosoriKettleBLE::send_setpoint_(uint8_t mode, uint8_t temp_f) {
   if (!this->is_connected()) {
     ESP_LOGW(TAG, "Cannot send setpoint: not connected");
@@ -374,7 +376,7 @@ void CosoriKettleBLE::send_f4_() {
   }
 }
 
-// TODO: ctrl -> "ACK"
+// TODO: ctrl -> "request compact status"  - probably not necessary?
 void CosoriKettleBLE::send_ctrl_(uint8_t seq_base) {
   if (!this->is_connected()) {
     ESP_LOGW(TAG, "Cannot send CTRL: not connected");
@@ -839,7 +841,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
 
     case CommandState::HANDSHAKE_PACKET_1: {
       uint8_t payload[36];
-      payload[0] = 0x00; // TODO: use 0x01 for v1 devices
+      payload[0] = this->protocol_version_; // Protocol version (0 or 1)
       payload[1] = 0x81;
       payload[2] = 0xD1;
       payload[3] = 0x00;
@@ -869,6 +871,7 @@ void CosoriKettleBLE::process_command_state_machine_() {
       // Wait for all chunks to be sent (waiting_for_write_ack_ will be false when done)
       if (!this->waiting_for_write_ack_ && this->send_chunk_index_ >= this->send_total_chunks_) {
         // All chunks sent, proceed to poll
+        // TODO: add wait for ack before poll
         this->command_state_ = CommandState::HANDSHAKE_POLL;
         this->command_state_time_ = now;
       }
