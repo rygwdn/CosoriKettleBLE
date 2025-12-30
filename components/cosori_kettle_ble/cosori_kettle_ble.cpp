@@ -325,8 +325,6 @@ void CosoriKettleBLE::send_set_hold_time(uint16_t seconds) {
   }
 }
 
-
-// TODO: this is "start heating" with a hold time of 60 minutes
 void CosoriKettleBLE::send_set_mode(uint8_t mode, uint8_t temp_f) {
   if (!this->is_connected()) {
     ESP_LOGW(TAG, "Cannot send setpoint: not connected");
@@ -335,8 +333,17 @@ void CosoriKettleBLE::send_set_mode(uint8_t mode, uint8_t temp_f) {
   
   uint8_t seq = this->next_tx_seq_();
   uint8_t payload[9];
-  size_t payload_len = build_set_mode_payload(this->protocol_version_, mode, temp_f,
-                                               this->hold_time_seconds_, payload);
+  if (this->protocol_version_ == 1) {
+    if (mode == MODE_HEAT) {
+      ESP_LOGW(TAG, "Cannot send set mode: HEAT mode not supported in V1");
+      mode = MODE_BOIL;
+    }
+    if (mode != MODE_MY_TEMP) {
+      temp_f = 0;
+    }
+  }
+
+  size_t payload_len = build_set_mode_payload(this->protocol_version_, mode, temp_f, this->hold_time_seconds_, payload);
   if (payload_len == 0) {
     ESP_LOGW(TAG, "Failed to build set mode payload");
     return;
@@ -747,14 +754,28 @@ void CosoriKettleBLE::start_heating() {
 
   uint8_t temp_f = static_cast<uint8_t>(std::round(this->target_setpoint_f_));
   uint8_t mode = (temp_f == MAX_TEMP_F) ? MODE_BOIL : MODE_HEAT;
-  // TODO: need to handle v1 modes here since it doesn't support MODE_HEAT? use existing mode if available, otherwise set mytemp first and use that
+  auto command_state = CommandState::HEAT_START;
+
+  if (this->protocol_version_ == 1 && mode == MODE_HEAT) {
+    // V1 doesn't support MODE_HEAT, so we need to use mytemp or set mode first
+    if (temp_f == MODE_GREEN_TEA_F) {
+      mode = MODE_GREEN_TEA;
+    } else if (temp_f == MODE_OOLONG_F) {
+      mode = MODE_OOLONG;
+    } else if (temp_f == MODE_COFFEE_F) {
+      mode = MODE_COFFEE;
+    } else {
+      mode = MODE_MY_TEMP;
+      command_state = CommandState::HEAT_SET_TEMP;
+    }
+  }
 
   ESP_LOGI(TAG, "Starting kettle at %.0f°F", this->target_setpoint_f_);
 
   // Store parameters and start state machine
   this->pending_temp_f_ = temp_f;
   this->pending_mode_ = mode;
-  this->command_state_ = CommandState::HEAT_START;
+  this->command_state_ = command_state;
   this->command_state_time_ = millis();
 }
 
@@ -1021,7 +1042,6 @@ void CosoriKettleBLE::process_command_state_machine_() {
 
     case CommandState::HANDSHAKE_WAIT_CHUNKS:
       if (!this->waiting_for_write_ack_ && this->send_chunk_index_ >= this->send_total_chunks_) {
-        // TODO: add wait for ack before poll
         this->command_state_ = CommandState::HANDSHAKE_POLL;
         this->command_state_time_ = now;
       }
@@ -1041,8 +1061,22 @@ void CosoriKettleBLE::process_command_state_machine_() {
       }
       break;
 
-    case CommandState::HEAT_START:
+    case CommandState::HEAT_SET_TEMP:
       if (elapsed >= PRE_SETPOINT_DELAY_MS) {
+        if (this->protocol_version_ != 1 || this->pending_mode_ != MODE_MY_TEMP) {
+          // Can use custom temp mode for v0
+          this->command_state_ = CommandState::HEAT_START;
+          break;
+        }
+
+        this->set_my_temp(this->pending_temp_f_);
+        this->command_state_ = CommandState::HEAT_START;
+        this->command_state_time_ = now;
+      }
+      break;
+
+    case CommandState::HEAT_START:
+      if (elapsed >= PRE_SETPOINT_DELAY_MS && !this->pending_my_temp_) {
         this->send_set_mode(this->pending_mode_, this->pending_temp_f_);
         this->command_state_ = CommandState::HEAT_POLL;
         this->command_state_time_ = now;

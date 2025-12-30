@@ -118,6 +118,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
     HANDSHAKE_WAIT_CHUNKS,
     HANDSHAKE_POLL,
     HEAT_START,
+    HEAT_SET_TEMP,
     HEAT_POLL,
     HEAT_POLL_REPEAT,
     HEAT_COMPLETE,

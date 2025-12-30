@@ -35,6 +35,13 @@ static constexpr uint8_t MAX_VALID_READING_F = 230;
 // Operating modes
 static constexpr uint8_t MODE_BOIL = 0x04;
 static constexpr uint8_t MODE_HEAT = 0x06;
+static constexpr uint8_t MODE_GREEN_TEA = 0x01;
+static constexpr uint8_t MODE_GREEN_TEA_F = 180;
+static constexpr uint8_t MODE_OOLONG = 0x02;
+static constexpr uint8_t MODE_OOLONG_F = 195;
+static constexpr uint8_t MODE_COFFEE = 0x03;
+static constexpr uint8_t MODE_COFFEE_F = 205;
+static constexpr uint8_t MODE_MY_TEMP = 0x05;
 
 // Status packet structures
 struct CompactStatus {
