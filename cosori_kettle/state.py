@@ -18,6 +18,14 @@ class KettleState:
     connected: bool = False
     last_update: float = 0.0
     
+    # Extended status fields
+    mytemp_f: Optional[int] = None
+    baby_formula_mode: Optional[bool] = None
+    hold_time_remaining_seconds: Optional[int] = None
+    error_code: Optional[int] = None
+    stage: Optional[int] = None
+    mode: Optional[int] = None
+    
     def update_from_packet(self, packet: StatusPacket) -> dict:
         """Update state from parsed packet. Returns dict of changed fields."""
         changes = {}
@@ -37,6 +45,35 @@ class KettleState:
         if packet.on_base is not None and self.on_base != packet.on_base:
             changes['on_base'] = (self.on_base, packet.on_base)
             self.on_base = packet.on_base
+        
+        # Update extended fields
+        if packet.mytemp_f is not None and self.mytemp_f != packet.mytemp_f:
+            changes['mytemp_f'] = (self.mytemp_f, packet.mytemp_f)
+            self.mytemp_f = packet.mytemp_f
+        
+        if packet.baby_formula_mode is not None and self.baby_formula_mode != packet.baby_formula_mode:
+            changes['baby_formula_mode'] = (self.baby_formula_mode, packet.baby_formula_mode)
+            self.baby_formula_mode = packet.baby_formula_mode
+        
+        if packet.hold_time_remaining_seconds is not None and self.hold_time_remaining_seconds != packet.hold_time_remaining_seconds:
+            changes['hold_time_remaining_seconds'] = (self.hold_time_remaining_seconds, packet.hold_time_remaining_seconds)
+            self.hold_time_remaining_seconds = packet.hold_time_remaining_seconds
+        
+        if packet.error_code is not None and self.error_code != packet.error_code:
+            changes['error_code'] = (self.error_code, packet.error_code)
+            self.error_code = packet.error_code
+        
+        # Update stage and mode
+        stage_val = int(packet.stage)
+        mode_val = int(packet.mode)
+        
+        if self.stage != stage_val:
+            changes['stage'] = (self.stage, stage_val)
+            self.stage = stage_val
+        
+        if self.mode != mode_val:
+            changes['mode'] = (self.mode, mode_val)
+            self.mode = mode_val
         
         self.last_update = time.time()
         return changes

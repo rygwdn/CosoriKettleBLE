@@ -15,9 +15,11 @@ from bleak import BleakClient, BleakScanner, BLEDevice
 from bleak.backends.characteristic import BleakGATTCharacteristic
 
 from .protocol import (
-    PacketParser, PacketBuilder, StatusPacket, Command,
+    PacketParser, PacketBuilder, StatusPacket, AckPacket, CompletionPacket, Command,
+    CommandManager, ProtocolVersion, OperatingMode, HeatingStage, CompletionStatus,
     MODE_BOIL, MODE_HEAT, MIN_TEMP_F, MAX_TEMP_F,
-    HANDSHAKE_DELAY_MS, PRE_SETPOINT_DELAY_MS, POST_SETPOINT_DELAY_MS, CONTROL_DELAY_MS
+    HANDSHAKE_DELAY_MS, PRE_SETPOINT_DELAY_MS, POST_SETPOINT_DELAY_MS, CONTROL_DELAY_MS,
+    generate_registration_key, is_error_state
 )
 from .state import StateManager
 
@@ -45,14 +47,23 @@ class CosoriKettleClient:
         
         self.parser = PacketParser()
         self.state_manager = StateManager(on_state_change)
+        self.command_manager = CommandManager()
         
         self._running = False
         self._registration_complete = False
+        self._registration_key: Optional[bytes] = None
         
         # Device version info
         self.hardware_version: Optional[str] = None
         self.software_version: Optional[str] = None
+        self.protocol_version: ProtocolVersion = ProtocolVersion.V0
         self.use_scan_hello: bool = False
+        self.requires_hello5: bool = True
+        
+        # Callbacks
+        self.on_heating_complete: Optional[Callable[[], None]] = None
+        self.on_hold_complete: Optional[Callable[[], None]] = None
+        self.on_error: Optional[Callable[[int], None]] = None
     
     async def scan(self, name_filter: str = "Cosori") -> list[BLEDevice]:
         """Scan for Cosori kettles."""
@@ -176,15 +187,36 @@ class CosoriKettleClient:
         packets = self.parser.process_frames()
         
         for packet in packets:
-            if isinstance(packet, StatusPacket) and packet.packet_type == "extended":
-                if not self._registration_complete:
-                    self._registration_complete = True
-                    logger.info("Registration handshake complete")
+            # Handle different packet types
+            if isinstance(packet, StatusPacket):
+                if packet.packet_type == "extended":
+                    if not self._registration_complete:
+                        self._registration_complete = True
+                        logger.info("Registration handshake complete")
+                
+                # Check for error states
+                if is_error_state(packet):
+                    logger.error(f"Error state detected: error_code={packet.error_code}")
+                    if self.on_error and packet.error_code is not None:
+                        self.on_error(packet.error_code)
+                
+                self.state_manager.update_from_packet(packet)
             
-            self.state_manager.update_from_packet(packet)
+            elif isinstance(packet, AckPacket):
+                # Handle command acknowledgment
+                logger.info(f"ACK received: seq={packet.seq}, success={packet.success}")
+                self.command_manager.handle_ack(packet)
+            
+            elif isinstance(packet, CompletionPacket):
+                # Handle completion notification
+                logger.info(f"Completion: {packet.status.name}")
+                if packet.status == CompletionStatus.DONE and self.on_heating_complete:
+                    self.on_heating_complete()
+                elif packet.status == CompletionStatus.HOLD_COMPLETE and self.on_hold_complete:
+                    self.on_hold_complete()
     
     async def _do_registration(self) -> None:
-        """Perform registration handshake: hello -> delay -> poll."""
+        """Perform registration handshake: hello -> delay -> status_request."""
         try:
             hello_pkt = PacketBuilder.make_hello(0)
             await self._send_packet_split(hello_pkt)
@@ -192,16 +224,36 @@ class CosoriKettleClient:
             await asyncio.sleep(HANDSHAKE_DELAY_MS / 1000.0)
             
             seq = self.state_manager.next_tx_seq()
-            poll_pkt = PacketBuilder.make_poll(seq)
-            await self._send_packet_split(poll_pkt)
+            status_req = PacketBuilder.make_status_request(seq)
+            await self._send_packet_split(status_req)
         except Exception as e:
             logger.error(f"Registration error: {e}")
     
-    async def _send_packet_split(self, packet: bytes) -> None:
-        """Send packet, splitting into 20-byte chunks if needed."""
-        if not self.tx_char or not self.client or not self.client.is_connected:
-            return
+    async def _send_packet_split(self, packet: bytes, wait_for_ack: bool = False, 
+                                  seq: Optional[int] = None, command: Optional[bytes] = None,
+                                  timeout: float = 1.0) -> bool:
+        """Send packet, splitting into 20-byte chunks if needed.
         
+        Args:
+            packet: Packet bytes to send
+            wait_for_ack: Whether to wait for ACK
+            seq: Sequence number (required if wait_for_ack=True)
+            command: Command bytes (required if wait_for_ack=True)
+            timeout: ACK timeout in seconds
+            
+        Returns:
+            True if sent successfully (and ACK received if requested), False otherwise
+        """
+        if not self.tx_char or not self.client or not self.client.is_connected:
+            return False
+        
+        # Register command if waiting for ACK
+        if wait_for_ack:
+            if seq is None or command is None:
+                raise ValueError("seq and command required when wait_for_ack=True")
+            self.command_manager.register_command(seq, command)
+        
+        # Send packet
         max_size = 20
         if len(packet) <= max_size:
             hex_str = ":".join(f"{b:02x}" for b in packet)
@@ -213,6 +265,15 @@ class CosoriKettleClient:
                 hex_str = ":".join(f"{b:02x}" for b in chunk)
                 logger.info(f"TX: {hex_str} (chunk {i//max_size + 1})")
                 await self.client.write_gatt_char(self.tx_char, chunk, response=False)
+        
+        # Wait for ACK if requested
+        if wait_for_ack:
+            ack_received = await self.command_manager.wait_for_ack(seq, timeout)
+            if not ack_received:
+                logger.warning(f"ACK timeout for seq={seq}")
+            return ack_received
+        
+        return True
     
     async def send_packet(self, packet: bytes) -> None:
         """Send packet manually."""
@@ -220,18 +281,19 @@ class CosoriKettleClient:
             raise RuntimeError("Not connected")
         await self._send_packet_split(packet)
     
-    async def poll(self) -> None:
-        """Send poll/status request."""
+    async def request_status(self) -> None:
+        """Send status request."""
         if not self.is_connected():
             return
         seq = self.state_manager.next_tx_seq()
-        poll_pkt = PacketBuilder.make_poll(seq)
-        await self.send_packet(poll_pkt)
+        status_req = PacketBuilder.make_status_request(seq)
+        await self.send_packet(status_req)
     
     async def set_target_temperature(self, temp_f: float) -> None:
-        """Set target temperature and start heating.
+        """Set target temperature and start heating (V0 protocol).
         
-        Sequence: hello5 -> delay -> setpoint -> delay -> ack -> delay -> ack
+        Sequence: [hello5] -> delay -> setpoint -> delay -> ack -> delay -> ack
+        Note: hello5 is optional depending on device version
         """
         temp_f = max(MIN_TEMP_F, min(MAX_TEMP_F, temp_f))
         temp_f_int = int(round(temp_f))
@@ -240,9 +302,11 @@ class CosoriKettleClient:
         
         logger.info(f"Setting target temperature to {temp_f_int}°F (mode={mode:02x})")
         
-        seq = self.state_manager.next_tx_seq()
-        await self._send_packet_split(PacketBuilder.make_hello5(seq))
-        await asyncio.sleep(PRE_SETPOINT_DELAY_MS / 1000.0)
+        # Send hello5 if required by device
+        if self.requires_hello5:
+            seq = self.state_manager.next_tx_seq()
+            await self._send_packet_split(PacketBuilder.make_hello5(seq))
+            await asyncio.sleep(PRE_SETPOINT_DELAY_MS / 1000.0)
         
         seq = self.state_manager.next_tx_seq()
         await self._send_packet_split(PacketBuilder.make_setpoint(seq, mode, temp_f_int))
@@ -269,15 +333,133 @@ class CosoriKettleClient:
         logger.info("Stopping heating")
         
         seq = self.state_manager.next_tx_seq()
-        await self._send_packet_split(PacketBuilder.make_stop(seq))
-        await asyncio.sleep(CONTROL_DELAY_MS / 1000.0)
+        stop_pkt = PacketBuilder.make_stop(seq, self.protocol_version)
         
-        seq_ctrl = self.state_manager.last_status_seq or self.state_manager.next_tx_seq()
-        await self._send_packet_split(PacketBuilder.make_ack(seq_ctrl, Command.STATUS_COMPACT))
-        await asyncio.sleep(CONTROL_DELAY_MS / 1000.0)
+        if self.protocol_version == ProtocolVersion.V1:
+            # V1 protocol: send stop and wait for ACK
+            await self._send_packet_split(stop_pkt, wait_for_ack=True, seq=seq, 
+                                         command=Command.V1_STOP, timeout=1.0)
+        else:
+            # V0 protocol: legacy sequence
+            await self._send_packet_split(stop_pkt)
+            await asyncio.sleep(CONTROL_DELAY_MS / 1000.0)
+            
+            seq_ctrl = self.state_manager.last_status_seq or self.state_manager.next_tx_seq()
+            await self._send_packet_split(PacketBuilder.make_ack(seq_ctrl, Command.STATUS_COMPACT))
+            await asyncio.sleep(CONTROL_DELAY_MS / 1000.0)
+            
+            seq = self.state_manager.next_tx_seq()
+            await self._send_packet_split(PacketBuilder.make_stop(seq, self.protocol_version))
+    
+    async def register(self, registration_key: Optional[bytes] = None) -> bool:
+        """Register with device (pairing mode required).
+        
+        Args:
+            registration_key: 32-byte ASCII hex registration key (generates new if None)
+            
+        Returns:
+            True if registration successful, False otherwise
+        """
+        if registration_key is None:
+            registration_key = generate_registration_key()
+        
+        logger.info("Registering with device (pairing mode required)")
         
         seq = self.state_manager.next_tx_seq()
-        await self._send_packet_split(PacketBuilder.make_stop(seq))
+        register_pkt = PacketBuilder.make_register(seq, registration_key)
+        
+        success = await self._send_packet_split(register_pkt, wait_for_ack=True, 
+                                                seq=seq, command=Command.V1_REGISTER, 
+                                                timeout=2.0)
+        
+        if success:
+            self._registration_key = registration_key
+            logger.info("Registration successful")
+        else:
+            logger.error("Registration failed")
+        
+        return success
+    
+    async def start_heating_v1(self, mode: OperatingMode, enable_hold: bool = False, 
+                               hold_minutes: int = 0) -> bool:
+        """Start heating using V1 protocol.
+        
+        Args:
+            mode: Operating mode
+            enable_hold: Enable keep-warm after heating
+            hold_minutes: Hold time in minutes
+            
+        Returns:
+            True if command successful
+        """
+        logger.info(f"Starting heating: mode={mode.name}, hold={enable_hold}, hold_time={hold_minutes}min")
+        
+        seq = self.state_manager.next_tx_seq()
+        hold_seconds = hold_minutes * 60
+        start_pkt = PacketBuilder.make_v1_start(seq, mode, enable_hold, hold_seconds)
+        
+        return await self._send_packet_split(start_pkt, wait_for_ack=True, 
+                                            seq=seq, command=Command.V1_START, timeout=1.0)
+    
+    async def start_delayed_v1(self, delay_minutes: int, mode: OperatingMode, 
+                              enable_hold: bool = False, hold_minutes: int = 0) -> bool:
+        """Start heating with delay using V1 protocol.
+        
+        Args:
+            delay_minutes: Delay in minutes before starting
+            mode: Operating mode
+            enable_hold: Enable keep-warm after heating
+            hold_minutes: Hold time in minutes
+            
+        Returns:
+            True if command successful
+        """
+        logger.info(f"Delayed start: delay={delay_minutes}min, mode={mode.name}, "
+                   f"hold={enable_hold}, hold_time={hold_minutes}min")
+        
+        seq = self.state_manager.next_tx_seq()
+        delay_seconds = delay_minutes * 60
+        hold_seconds = hold_minutes * 60
+        delay_pkt = PacketBuilder.make_v1_delay_start(seq, delay_seconds, mode, 
+                                                      enable_hold, hold_seconds)
+        
+        return await self._send_packet_split(delay_pkt, wait_for_ack=True, 
+                                            seq=seq, command=Command.V1_DELAY_START, timeout=1.0)
+    
+    async def set_mytemp(self, temp_f: int) -> bool:
+        """Set custom temperature for MY_TEMP mode.
+        
+        Args:
+            temp_f: Temperature in Fahrenheit
+            
+        Returns:
+            True if command successful
+        """
+        temp_f = max(MIN_TEMP_F, min(MAX_TEMP_F, temp_f))
+        logger.info(f"Setting mytemp to {temp_f}°F")
+        
+        seq = self.state_manager.next_tx_seq()
+        mytemp_pkt = PacketBuilder.make_v1_set_mytemp(seq, temp_f)
+        
+        return await self._send_packet_split(mytemp_pkt, wait_for_ack=True, 
+                                            seq=seq, command=Command.V1_SET_MYTEMP, timeout=1.0)
+    
+    async def set_baby_formula_mode(self, enabled: bool) -> bool:
+        """Set baby formula mode.
+        
+        Args:
+            enabled: Enable or disable baby formula mode
+            
+        Returns:
+            True if command successful
+        """
+        logger.info(f"Setting baby formula mode: {enabled}")
+        
+        seq = self.state_manager.next_tx_seq()
+        baby_pkt = PacketBuilder.make_v1_set_baby_mode(seq, enabled)
+        
+        return await self._send_packet_split(baby_pkt, wait_for_ack=True, 
+                                            seq=seq, command=Command.V1_SET_BABY_MODE, timeout=1.0)
     
     def is_connected(self) -> bool:
         """Check if connected."""
@@ -296,3 +478,8 @@ class CosoriKettleClient:
     def registration_complete(self) -> bool:
         """Check if registration is complete."""
         return self._registration_complete
+    
+    @property
+    def is_registered(self) -> bool:
+        """Check if device has been registered."""
+        return self._registration_key is not None

@@ -172,14 +172,14 @@ class KettleCLI:
         await self.client.stop_heating()
         console.print("[yellow]Stopping heating...[/yellow]")
     
-    async def poll(self) -> None:
-        """Send poll command."""
+    async def request_status(self) -> None:
+        """Send status request command."""
         if not self.client or not self.client.is_connected():
             console.print("[red]Not connected[/red]")
             return
         
-        await self.client.poll()
-        console.print("[green]Poll sent[/green]")
+        await self.client.request_status()
+        console.print("[green]Status request sent[/green]")
     
     async def monitor(self) -> None:
         """Monitor status continuously."""
@@ -280,8 +280,8 @@ class KettleCLI:
                 elif command == "stop":
                     await self.stop()
                 
-                elif command == "poll":
-                    await self.poll()
+                elif command == "status":
+                    await self.request_status()
                 
                 elif command == "monitor":
                     await self.monitor()
@@ -315,7 +315,7 @@ class KettleCLI:
         table.add_row("set <temp>", "Set target temperature (104-212°F)")
         table.add_row("start", "Start heating to target temperature")
         table.add_row("stop", "Stop heating")
-        table.add_row("poll", "Send status poll command")
+        table.add_row("status", "Send status request command")
         table.add_row("monitor", "Monitor status continuously")
         table.add_row("disconnect", "Disconnect from kettle")
         table.add_row("quit", "Exit CLI")
