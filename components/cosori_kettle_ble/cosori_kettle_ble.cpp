@@ -26,7 +26,7 @@ static constexpr size_t MAX_PAYLOAD_SIZE = 256;
 // Temperature limits and operating modes are now defined in protocol.h
 
 // Timing constants (milliseconds)
-static constexpr uint32_t HANDSHAKE_TIMEOUT_MS = 1000;
+static constexpr uint32_t HANDSHAKE_TIMEOUT_MS = 10000;
 static constexpr uint32_t PRE_SETPOINT_DELAY_MS = 60;
 static constexpr uint32_t POST_SETPOINT_DELAY_MS = 100;
 static constexpr uint32_t CONTROL_DELAY_MS = 50;
