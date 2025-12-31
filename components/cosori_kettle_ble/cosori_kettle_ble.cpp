@@ -189,7 +189,11 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       ESP_LOGI(TAG, "Registered for notifications, sending registration handshake");
 
       // Send registration handshake
-      this->send_hello_();
+      if (this->use_register_command_) {
+        this->send_register_();
+      } else {
+        this->send_hello_();
+      }
 
       // Mark registration sent
       this->registration_sent_ = true;
@@ -429,7 +433,7 @@ void CosoriKettleBLE::send_request_compact_status_(uint8_t seq_base) {
 
 bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t payload_len, bool is_ack) {
   // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    ESP_LOGD(TAG, "Sending command: seq=%02x, payload=%s", seq, bytes_to_hex_string(payload, payload_len).c_str());
+    // ESP_LOGD(TAG, "Sending command: seq=%02x, payload=%s", seq, bytes_to_hex_string(payload, payload_len).c_str());
   // }
 
   if (this->tx_char_handle_ == 0) {
@@ -592,7 +596,7 @@ void CosoriKettleBLE::process_frame_buffer_() {
     this->last_rx_seq_ = frame.seq;
     
     // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    ESP_LOGD(TAG, "Received frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, bytes_to_hex_string(frame.payload, frame.payload_len).c_str());
+    ESP_LOGD(TAG, "Processing frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, bytes_to_hex_string(frame.payload, frame.payload_len).c_str());
     // }
 
     if (frame.frame_type == ACK_HEADER_TYPE && this->waiting_for_ack_complete_ && this->waiting_for_ack_seq_ == frame.seq) {
@@ -699,13 +703,9 @@ void CosoriKettleBLE::set_target_setpoint(float temp_f) {
 }
 
 void CosoriKettleBLE::set_register_enabled(bool enabled) {
-  if (!this->is_connected()) {
-    ESP_LOGW(TAG, "Cannot %s: not connected", enabled ? "register device" : "send hello");
-    // Update switch state to reflect failure
-    if (this->register_switch_ != nullptr) {
-      this->register_switch_->publish_state(false);
-    }
-    return;
+  if (this->register_switch_ != nullptr) {
+    this->use_register_command_ = enabled;
+    this->register_switch_->publish_state(enabled);
   }
 
   if (enabled) {
