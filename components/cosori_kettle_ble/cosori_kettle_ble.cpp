@@ -593,20 +593,19 @@ void CosoriKettleBLE::process_frame_buffer_() {
     this->last_rx_seq_ = frame.seq;
     
     // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-      ESP_LOGD(TAG, "Received frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, bytes_to_hex_string(frame.payload, frame.payload_len).c_str());
+    ESP_LOGD(TAG, "Received frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, bytes_to_hex_string(frame.payload, frame.payload_len).c_str());
     // }
+
+    if (frame.frame_type == ACK_HEADER_TYPE && this->waiting_for_ack_complete_ && this->waiting_for_ack_seq_ == frame.seq) {
+      this->waiting_for_ack_complete_ = false;
+      this->last_ack_error_code_ = frame.payload_len > 4 ? static_cast<uint8_t>(frame.payload[4]) : 0;
+      ESP_LOGD(TAG, "ACK complete: seq=%02x, error_code=%02x", frame.seq, this->last_ack_error_code_);
+    }
 
     if (frame.frame_type == MESSAGE_HEADER_TYPE && frame.payload[1] == CMD_CTRL) {
       this->parse_compact_status_(frame.payload, frame.payload_len);
     } else if (frame.frame_type == ACK_HEADER_TYPE && frame.payload[1] == CMD_POLL) {
       this->parse_status_ack_(frame.payload, frame.payload_len);
-    } else if (frame.frame_type == ACK_HEADER_TYPE && !this->waiting_for_ack_complete_ && this->waiting_for_ack_seq_ == frame.seq) {
-      this->waiting_for_ack_complete_ = true;
-      if (frame.payload_len > 4) {
-        this->last_ack_error_code_ = static_cast<uint8_t>(frame.payload[4]);
-      } else {
-        this->last_ack_error_code_ = 0;
-      }
     }
   }
   
