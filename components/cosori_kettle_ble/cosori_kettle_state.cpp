@@ -559,6 +559,15 @@ uint8_t CosoriKettleState::next_tx_seq() {
   return tx_seq_;
 }
 
+bool CosoriKettleState::check_timeout_and_idle(uint32_t elapsed, uint32_t timeout_ms, const char* timeout_name) {
+  if (elapsed >= timeout_ms) {
+    ESP_LOGE(TAG, "%s timeout", timeout_name);
+    command_state_ = CommandState::IDLE;
+    return true;
+  }
+  return false;
+}
+
 void CosoriKettleState::process_command_state_machine(uint32_t now_ms) {
   // Initialize time on first call
   if (command_state_time_ == 0) {
@@ -667,108 +676,118 @@ void CosoriKettleState::handle_handshake_start(uint32_t now_ms) {
   waiting_for_ack_complete_ = true;
 
   // Wait for all chunks to be sent before proceeding to poll
-  command_state_ = CommandState::HANDSHAKE_WAIT_CHUNKS;
-  command_state_time_ = now_ms;
+  transition_state(CommandState::HANDSHAKE_WAIT_CHUNKS, now_ms);
 }
 
 void CosoriKettleState::handle_handshake_wait_chunks(uint32_t now_ms, uint32_t elapsed) {
-  if (!waiting_for_ack_complete_ && !waiting_for_write_ack_ && send_chunk_index_ >= send_total_chunks_) {
-    command_state_ = CommandState::HANDSHAKE_POLL;
-    command_state_time_ = now_ms;
+  if (check_timeout_and_idle(elapsed, HANDSHAKE_TIMEOUT_MS, "Handshake")) {
+    return;
   }
-  if (elapsed >= HANDSHAKE_TIMEOUT_MS) {
-    ESP_LOGE(TAG, "Handshake timeout");
-    command_state_ = CommandState::IDLE;
+
+  if (waiting_for_ack_complete_ || waiting_for_write_ack_ || send_chunk_index_ < send_total_chunks_) {
+    return;
   }
+
+  transition_state(CommandState::HANDSHAKE_POLL, now_ms);
 }
 
 void CosoriKettleState::handle_handshake_poll(uint32_t now_ms, uint32_t elapsed) {
-  if (!waiting_for_ack_complete_) {
-    if (last_ack_error_code_ != 0) {
-      ESP_LOGE(TAG, "Error in %s: %d", use_register_command_ ? "registration" : "handshake", last_ack_error_code_);
-      command_state_ = CommandState::IDLE;
-      return;
-    }
+  if (check_timeout_and_idle(elapsed, HANDSHAKE_TIMEOUT_MS, "Handshake")) {
+    return;
+  }
 
-    send_status_request();
-    command_state_ = CommandState::IDLE;
-    ESP_LOGI(TAG, "%s complete", use_register_command_ ? "Device registration" : "Registration handshake");
+  if (waiting_for_ack_complete_) {
+    return;
   }
-  if (elapsed >= HANDSHAKE_TIMEOUT_MS) {
-    ESP_LOGE(TAG, "Handshake timeout");
+
+  if (last_ack_error_code_ != 0) {
+    ESP_LOGE(TAG, "Error in %s: %d", use_register_command_ ? "registration" : "handshake", last_ack_error_code_);
     command_state_ = CommandState::IDLE;
+    return;
   }
+
+  send_status_request();
+  command_state_ = CommandState::IDLE;
+  ESP_LOGI(TAG, "%s complete", use_register_command_ ? "Device registration" : "Registration handshake");
 }
 
 void CosoriKettleState::handle_heat_set_temp(uint32_t now_ms, uint32_t elapsed) {
-  if (elapsed >= PRE_SETPOINT_DELAY_MS) {
-    if (config_.protocol_version != 1 || pending_mode_ != MODE_MY_TEMP) {
-      command_state_ = CommandState::HEAT_START;
-      return;
-    }
-
-    send_set_my_temp(pending_temp_f_);
-    command_state_ = CommandState::HEAT_START;
-    command_state_time_ = now_ms;
+  if (elapsed < PRE_SETPOINT_DELAY_MS) {
+    return;
   }
+
+  if (config_.protocol_version != 1 || pending_mode_ != MODE_MY_TEMP) {
+    command_state_ = CommandState::HEAT_START;
+    return;
+  }
+
+  send_set_my_temp(pending_temp_f_);
+  transition_state(CommandState::HEAT_START, now_ms);
 }
 
 void CosoriKettleState::handle_heat_start(uint32_t now_ms, uint32_t elapsed) {
-  if (elapsed >= PRE_SETPOINT_DELAY_MS && !pending_my_temp_) {
-    send_set_mode(pending_mode_, pending_temp_f_);
-    const auto next_state = config_.protocol_version == 1 ? CommandState::HEAT_COMPLETE : CommandState::HEAT_POLL;
-    command_state_ = next_state;
-    command_state_time_ = now_ms;
+  if (elapsed < PRE_SETPOINT_DELAY_MS || pending_my_temp_) {
+    return;
   }
+
+  send_set_mode(pending_mode_, pending_temp_f_);
+  const auto next_state = config_.protocol_version == 1 ? CommandState::HEAT_COMPLETE : CommandState::HEAT_POLL;
+  transition_state(next_state, now_ms);
 }
 
 void CosoriKettleState::handle_heat_poll(uint32_t now_ms, uint32_t elapsed) {
-  if (elapsed >= POST_SETPOINT_DELAY_MS) {
-    // Proceed to control even if no status (timeout after POST_SETPOINT_DELAY_MS)
-    uint8_t seq_base = (last_status_seq_ != 0) ? last_status_seq_ : last_rx_seq_;
-    send_request_compact_status(seq_base);
-    command_state_ = CommandState::HEAT_POLL_REPEAT;
-    command_state_time_ = now_ms;
+  if (elapsed < POST_SETPOINT_DELAY_MS) {
+    return;
   }
+
+  // Proceed to control even if no status (timeout after POST_SETPOINT_DELAY_MS)
+  uint8_t seq_base = (last_status_seq_ != 0) ? last_status_seq_ : last_rx_seq_;
+  send_request_compact_status(seq_base);
+  transition_state(CommandState::HEAT_POLL_REPEAT, now_ms);
 }
 
 void CosoriKettleState::handle_heat_poll_repeat(uint32_t now_ms, uint32_t elapsed) {
-  if (elapsed >= CONTROL_DELAY_MS) {
-    uint8_t seq_ack = next_tx_seq();
-    send_request_compact_status(seq_ack);
-    command_state_ = CommandState::HEAT_COMPLETE;
-    command_state_time_ = now_ms;
+  if (elapsed < CONTROL_DELAY_MS) {
+    return;
   }
+
+  uint8_t seq_ack = next_tx_seq();
+  send_request_compact_status(seq_ack);
+  transition_state(CommandState::HEAT_COMPLETE, now_ms);
 }
 
 void CosoriKettleState::handle_heat_complete(uint32_t now_ms, uint32_t elapsed) {
-  if (elapsed >= CONTROL_DELAY_MS) {
-    command_state_ = CommandState::IDLE;
-    ESP_LOGD(TAG, "Start heating sequence complete");
+  if (elapsed < CONTROL_DELAY_MS) {
+    return;
   }
+
+  command_state_ = CommandState::IDLE;
+  ESP_LOGD(TAG, "Start heating sequence complete");
 }
 
 void CosoriKettleState::handle_stop(uint32_t now_ms) {
   send_stop();
-  command_state_ = CommandState::STOP_POLL;
-  command_state_time_ = now_ms;
+  transition_state(CommandState::STOP_POLL, now_ms);
 }
 
 void CosoriKettleState::handle_stop_poll(uint32_t now_ms, uint32_t elapsed) {
-  if (elapsed >= CONTROL_DELAY_MS) {
-    uint8_t seq_ctrl = (last_status_seq_ != 0) ? last_status_seq_ : last_rx_seq_;
-    send_request_compact_status(seq_ctrl);
-    command_state_ = CommandState::STOP_REPEAT;
-    command_state_time_ = now_ms;
+  if (elapsed < CONTROL_DELAY_MS) {
+    return;
   }
+
+  uint8_t seq_ctrl = (last_status_seq_ != 0) ? last_status_seq_ : last_rx_seq_;
+  send_request_compact_status(seq_ctrl);
+  transition_state(CommandState::STOP_REPEAT, now_ms);
 }
 
 void CosoriKettleState::handle_stop_repeat(uint32_t now_ms, uint32_t elapsed) {
-  if (elapsed >= CONTROL_DELAY_MS) {
-    send_stop();
-    command_state_ = CommandState::IDLE;
-    ESP_LOGD(TAG, "Stop heating sequence complete");
+  if (elapsed < CONTROL_DELAY_MS) {
+    return;
   }
+
+  send_stop();
+  command_state_ = CommandState::IDLE;
+  ESP_LOGD(TAG, "Stop heating sequence complete");
 }
 
 // ============================================================================

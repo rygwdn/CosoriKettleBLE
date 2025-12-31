@@ -254,6 +254,14 @@ class CosoriKettleState {
   void process_command_state_machine(uint32_t now_ms);
   uint8_t next_tx_seq();
 
+  // State machine helpers
+  inline void transition_state(CommandState new_state, uint32_t now_ms) {
+    command_state_ = new_state;
+    command_state_time_ = now_ms;
+  }
+
+  bool check_timeout_and_idle(uint32_t elapsed, uint32_t timeout_ms, const char* timeout_name);
+
   // State machine handlers
   void handle_handshake_start(uint32_t now_ms);
   void handle_handshake_wait_chunks(uint32_t now_ms, uint32_t elapsed);
