@@ -3,10 +3,10 @@ import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import sensor
 from esphome.const import (
-    CONF_ID,
     CONF_TEMPERATURE,
     DEVICE_CLASS_TEMPERATURE,
     STATE_CLASS_MEASUREMENT,
+    DEVICE_CLASS_DURATION,
 )
 from . import COSORI_KETTLE_BLE_COMPONENT_SCHEMA, CONF_COSORI_KETTLE_BLE_ID
 
@@ -20,17 +20,21 @@ CONFIG_SCHEMA = COSORI_KETTLE_BLE_COMPONENT_SCHEMA.extend(
             accuracy_decimals=0,
             device_class=DEVICE_CLASS_TEMPERATURE,
             state_class=STATE_CLASS_MEASUREMENT,
+            icon="mdi:thermometer",
         ),
         cv.Optional(CONF_KETTLE_SETPOINT): sensor.sensor_schema(
             unit_of_measurement="°F",
             accuracy_decimals=0,
             device_class=DEVICE_CLASS_TEMPERATURE,
             state_class=STATE_CLASS_MEASUREMENT,
+            icon="mdi:thermometer",
         ),
         cv.Optional(CONF_HOLD_TIME_REMAINING): sensor.sensor_schema(
             unit_of_measurement="s",
             accuracy_decimals=0,
+            device_class=DEVICE_CLASS_DURATION,
             state_class=STATE_CLASS_MEASUREMENT,
+            icon="mdi:timer",
         ),
     }
 )

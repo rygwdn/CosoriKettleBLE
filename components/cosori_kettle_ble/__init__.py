@@ -6,7 +6,7 @@ from esphome.const import CONF_ID
 
 CODEOWNERS = ["@barrymichels"]
 DEPENDENCIES = ["ble_client"]
-AUTO_LOAD = ["sensor", "binary_sensor", "number", "switch", "button", "climate"]
+AUTO_LOAD = ["sensor", "binary_sensor", "number", "switch", "climate"]
 
 CONF_COSORI_KETTLE_BLE_ID = "cosori_kettle_ble_id"
 CONF_REGISTRATION_KEY = "registration_key"
@@ -20,6 +20,7 @@ CosoriKettleBLE = cosori_kettle_ble_ns.class_(
 COSORI_KETTLE_BLE_COMPONENT_SCHEMA = cv.Schema(
     {
         cv.GenerateID(CONF_COSORI_KETTLE_BLE_ID): cv.use_id(CosoriKettleBLE),
+        cv.Optional(cv.CONF_DEVICE_ID): cv.sub_device_id,
     }
 )
 
@@ -48,7 +49,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_PROTOCOL_VERSION, default=0): cv.one_of(0, 1, int=True),
         }
     )
-    .extend(cv.polling_component_schema("1s"))
+    .extend(cv.polling_component_schema("10s"))
     .extend(ble_client.BLE_CLIENT_SCHEMA)
 )
 

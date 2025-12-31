@@ -2,7 +2,7 @@
 import esphome.codegen as cg
 import esphome.config_validation as cv
 from esphome.components import switch
-from esphome.const import CONF_ID
+from esphome.const import CONF_ID, DEVICE_CLASS_HEAT, DEVICE_CLASS_SWITCH
 from . import COSORI_KETTLE_BLE_COMPONENT_SCHEMA, CONF_COSORI_KETTLE_BLE_ID, cosori_kettle_ble_ns
 
 CONF_HEATING_SWITCH = "heating_switch"
@@ -19,15 +19,24 @@ CONFIG_SCHEMA = COSORI_KETTLE_BLE_COMPONENT_SCHEMA.extend(
     {
         cv.Optional(CONF_HEATING_SWITCH): switch.switch_schema(
             CosoriKettleHeatingSwitch,
+            icon="mdi:kettle-steam",
+            device_class=DEVICE_CLASS_SWITCH,
         ),
         cv.Optional(CONF_BLE_CONNECTION_SWITCH): switch.switch_schema(
             CosoriKettleBLEConnectionSwitch,
+            icon="mdi:bluetooth",
+            device_class=DEVICE_CLASS_SWITCH,
+            default_restore_mode="RESTORE_DEFAULT_ON",
         ),
         cv.Optional(CONF_BABY_FORMULA_SWITCH): switch.switch_schema(
             CosoriKettleBabyFormulaSwitch,
+            icon="mdi:baby-bottle",
+            device_class=DEVICE_CLASS_SWITCH,
         ),
         cv.Optional(CONF_REGISTER_SWITCH): switch.switch_schema(
             CosoriKettleRegisterSwitch,
+            icon="mdi:key-plus",
+            device_class=DEVICE_CLASS_SWITCH,
         ),
     }
 )

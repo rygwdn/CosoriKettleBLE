@@ -1003,13 +1003,6 @@ void CosoriKettleBLE::track_online_status_() {
       this->my_temp_number_->publish_state(NAN);
     if (this->target_setpoint_number_ != nullptr)
       this->target_setpoint_number_->publish_state(NAN);
-
-    // if (this->baby_formula_switch_ != nullptr)
-    //   this->baby_formula_switch_->publish_state(false);
-    // if (this->heating_switch_ != nullptr)
-    //   this->heating_switch_->publish_state(false);
-    // if (this->ble_connection_switch_ != nullptr)
-    //   this->ble_connection_switch_->publish_state(false);
   }
 }
 
