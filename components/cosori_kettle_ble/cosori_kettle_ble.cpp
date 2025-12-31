@@ -1026,6 +1026,9 @@ void CosoriKettleBLE::process_command_state_machine_() {
   uint32_t elapsed = now - this->command_state_time_;
 
   const auto initial_state = this->command_state_;
+  if (initial_state != CommandState::IDLE && elapsed) {
+    ESP_LOGI(TAG, "Running command state machine in state %d", initial_state);
+  }
 
   switch (this->command_state_) {
     case CommandState::IDLE:
@@ -1185,8 +1188,10 @@ void CosoriKettleBLE::process_command_state_machine_() {
   if (this->command_state_ != initial_state) {
     ESP_LOGD(TAG, "Command state changed from %d to %d", initial_state, this->command_state_);
     this->process_command_state_machine_();
-  } else if (this->command_state_ == CommandState::IDLE && elapsed >= IDLE_TIMEOUT_MS) {
-    ESP_LOGE(TAG, "Idle timeout");
+  }
+
+  if (this->command_state_ != CommandState::IDLE && this->command_state_ == initial_state && elapsed >= IDLE_TIMEOUT_MS) {
+    ESP_LOGE(TAG, "Idle timeout from %d to IDLE", initial_state);
     this->command_state_ = CommandState::IDLE;
   }
 }
