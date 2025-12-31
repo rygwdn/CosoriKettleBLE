@@ -224,10 +224,9 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
       if (param->notify.handle != this->rx_char_handle_)
         break;
 
-      // Log full RX packet as hex dump (only when DEBUG level is enabled)
-      // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+      #ifdef ESPHOME_LOG_HAS_DEBUG
         ESP_LOGD(TAG, "RX: %s", bytes_to_hex_string(param->notify.value, param->notify.value_len).c_str());
-      // }
+      #endif
 
       // Check buffer size limit before appending
       if (recv_buffer.size() + param->notify.value_len > MAX_FRAME_BUFFER_SIZE) {
@@ -523,7 +522,9 @@ void CosoriKettleBLE::send_next_chunk_() {
     this->send_total_chunks_ = 0;
     this->waiting_for_write_ack_ = false;
   } else {
-    ESP_LOGD(TAG, "Sent chunk %zu/%zu (%zu bytes): %s", current_chunk, this->send_total_chunks_, chunk_size, bytes_to_hex_string(chunk_data, chunk_size).c_str());
+    #ifdef ESPHOME_LOG_HAS_DEBUG
+      ESP_LOGD(TAG, "Sent chunk %zu/%zu (%zu bytes): %s", current_chunk, this->send_total_chunks_, chunk_size, bytes_to_hex_string(chunk_data, chunk_size).c_str());
+    #endif
   }
 }
 
@@ -545,9 +546,9 @@ void CosoriKettleBLE::process_frame_buffer_() {
     // Update last RX sequence
     this->last_rx_seq_ = frame.seq;
     
-    // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    ESP_LOGD(TAG, "Processing frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, bytes_to_hex_string(frame.payload, frame.payload_len).c_str());
-    // }
+    #ifdef ESPHOME_LOG_HAS_DEBUG
+      ESP_LOGD(TAG, "Processing frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, bytes_to_hex_string(frame.payload, frame.payload_len).c_str());
+    #endif
 
     if (frame.frame_type == ACK_HEADER_TYPE && this->waiting_for_ack_complete_ && this->waiting_for_ack_seq_ == frame.seq) {
       this->waiting_for_ack_complete_ = false;
