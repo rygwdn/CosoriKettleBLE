@@ -72,6 +72,7 @@ void CosoriKettleBLE::dump_config() {
   LOG_BINARY_SENSOR("  ", "Heating", this->heating_binary_sensor_);
   LOG_SENSOR("  ", "Temperature", this->temperature_sensor_);
   LOG_SENSOR("  ", "Kettle Setpoint", this->kettle_setpoint_sensor_);
+  LOG_SENSOR("  ", "Hold Time Remaining", this->hold_time_remaining_sensor_);
   LOG_NUMBER("  ", "Target Setpoint", this->target_setpoint_number_);
   LOG_NUMBER("  ", "Hold Time", this->hold_time_number_);
   LOG_NUMBER("  ", "My Temp", this->my_temp_number_);
@@ -615,12 +616,8 @@ void CosoriKettleBLE::parse_status_ack_(const uint8_t *payload, size_t len) {
   this->heating_ = (status.stage != 0);
   this->status_received_ = true;
   this->last_status_seq_ = this->last_rx_seq_;
-
-  bool prev_on_base = this->on_base_;
   this->on_base_ = status.on_base;
-  if (prev_on_base != this->on_base_) {
-    ESP_LOGI(TAG, "On-base: %s", this->on_base_ ? "ON" : "OFF");
-  }
+  this->remaining_hold_time_seconds_ = status.remaining_hold_time;
 
   if (this->pending_my_temp_) {
     this->pending_my_temp_ = false;
@@ -908,6 +905,10 @@ void CosoriKettleBLE::update_sensors_() {
     this->kettle_setpoint_sensor_->publish_state(this->kettle_setpoint_f_);
   }
 
+  if (this->hold_time_remaining_sensor_ != nullptr) {
+    this->hold_time_remaining_sensor_->publish_state(static_cast<float>(this->remaining_hold_time_seconds_));
+  }
+
   if (this->on_base_binary_sensor_ != nullptr) {
     this->on_base_binary_sensor_->publish_state(this->on_base_);
   }
@@ -941,8 +942,6 @@ void CosoriKettleBLE::update_mutable_entities_() {
   if (this->heating_switch_ != nullptr) {
     this->heating_switch_->publish_state(this->heating_);
   }
-
-  // TODO: add hold time remaining number
 }
 
 void CosoriKettleBLE::update_entities_() {
@@ -986,12 +985,32 @@ void CosoriKettleBLE::track_online_status_() {
   if (this->no_response_count_ >= NO_RESPONSE_THRESHOLD && this->status_received_) {
     ESP_LOGW(TAG, "No response from kettle, marking offline");
     this->status_received_ = false;
+
     // Publish unavailable state
     if (this->temperature_sensor_ != nullptr)
       this->temperature_sensor_->publish_state(NAN);
     if (this->kettle_setpoint_sensor_ != nullptr)
       this->kettle_setpoint_sensor_->publish_state(NAN);
-    // TODO: update other entities
+    if (this->hold_time_remaining_sensor_ != nullptr)
+      this->hold_time_remaining_sensor_->publish_state(NAN);
+    if (this->on_base_binary_sensor_ != nullptr)
+      this->on_base_binary_sensor_->invalidate_state();
+    if (this->heating_binary_sensor_ != nullptr)
+      this->heating_binary_sensor_->invalidate_state();
+
+    if (this->hold_time_number_ != nullptr)
+      this->hold_time_number_->publish_state(NAN);
+    if (this->my_temp_number_ != nullptr)
+      this->my_temp_number_->publish_state(NAN);
+    if (this->target_setpoint_number_ != nullptr)
+      this->target_setpoint_number_->publish_state(NAN);
+
+    // if (this->baby_formula_switch_ != nullptr)
+    //   this->baby_formula_switch_->publish_state(false);
+    // if (this->heating_switch_ != nullptr)
+    //   this->heating_switch_->publish_state(false);
+    // if (this->ble_connection_switch_ != nullptr)
+    //   this->ble_connection_switch_->publish_state(false);
   }
 }
 

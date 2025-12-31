@@ -29,6 +29,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   // Sensor setters
   void set_temperature_sensor(sensor::Sensor *sensor) { temperature_sensor_ = sensor; }
   void set_kettle_setpoint_sensor(sensor::Sensor *sensor) { kettle_setpoint_sensor_ = sensor; }
+  void set_hold_time_remaining_sensor(sensor::Sensor *sensor) { hold_time_remaining_sensor_ = sensor; }
 
   // Binary sensor setters
   void set_on_base_binary_sensor(binary_sensor::BinarySensor *sensor) { on_base_binary_sensor_ = sensor; }
@@ -96,6 +97,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   float kettle_setpoint_f_{0.0};
   float target_setpoint_f_{212.0};
   uint16_t hold_time_seconds_{0};
+  uint16_t remaining_hold_time_seconds_{0};
   uint8_t my_temp_f_{179};
   bool baby_formula_enabled_{false};
   bool on_base_{false};
@@ -142,6 +144,7 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
   // Entity pointers
   sensor::Sensor *temperature_sensor_{nullptr};
   sensor::Sensor *kettle_setpoint_sensor_{nullptr};
+  sensor::Sensor *hold_time_remaining_sensor_{nullptr};
   binary_sensor::BinarySensor *on_base_binary_sensor_{nullptr};
   binary_sensor::BinarySensor *heating_binary_sensor_{nullptr};
   number::Number *target_setpoint_number_{nullptr};

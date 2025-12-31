@@ -389,10 +389,6 @@ void test_protocol_parse() {
         assert(status.stage == 0x03);
         assert(status.mode == 0x01);
         
-        // TODO: hold time is actually the 2c01. REMAINING hold time is 009f
-        std::cout << "status.configured_hold_time: " << static_cast<int>(status.configured_hold_time) << std::endl;
-        std::cout << "status.remaining_hold_time: " << static_cast<int>(status.remaining_hold_time) << std::endl;
-
         assert(status.configured_hold_time == 0x012C);
         assert(status.remaining_hold_time == 0x009F);
         

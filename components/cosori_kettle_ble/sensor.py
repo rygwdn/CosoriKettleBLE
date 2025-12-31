@@ -11,6 +11,7 @@ from esphome.const import (
 from . import COSORI_KETTLE_BLE_COMPONENT_SCHEMA, CONF_COSORI_KETTLE_BLE_ID
 
 CONF_KETTLE_SETPOINT = "kettle_setpoint"
+CONF_HOLD_TIME_REMAINING = "hold_time_remaining"
 
 CONFIG_SCHEMA = COSORI_KETTLE_BLE_COMPONENT_SCHEMA.extend(
     {
@@ -24,6 +25,11 @@ CONFIG_SCHEMA = COSORI_KETTLE_BLE_COMPONENT_SCHEMA.extend(
             unit_of_measurement="°F",
             accuracy_decimals=0,
             device_class=DEVICE_CLASS_TEMPERATURE,
+            state_class=STATE_CLASS_MEASUREMENT,
+        ),
+        cv.Optional(CONF_HOLD_TIME_REMAINING): sensor.sensor_schema(
+            unit_of_measurement="s",
+            accuracy_decimals=0,
             state_class=STATE_CLASS_MEASUREMENT,
         ),
     }
@@ -41,3 +47,7 @@ async def to_code(config):
     if CONF_KETTLE_SETPOINT in config:
         sens = await sensor.new_sensor(config[CONF_KETTLE_SETPOINT])
         cg.add(parent.set_kettle_setpoint_sensor(sens))
+
+    if CONF_HOLD_TIME_REMAINING in config:
+        sens = await sensor.new_sensor(config[CONF_HOLD_TIME_REMAINING])
+        cg.add(parent.set_hold_time_remaining_sensor(sens))

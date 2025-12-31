@@ -14,6 +14,8 @@ build/
 *.bin
 *.elf
 *.map
+/test_cpp
+*.o
 
 # VS Code
 .vscode/.browse.c_cpp.db*
