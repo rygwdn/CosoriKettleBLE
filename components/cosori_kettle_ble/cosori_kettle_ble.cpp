@@ -40,6 +40,17 @@ static const char *COSORI_SERVICE_UUID = "0000fff0-0000-1000-8000-00805f9b34fb";
 static const char *COSORI_RX_CHAR_UUID = "0000fff1-0000-1000-8000-00805f9b34fb";
 static const char *COSORI_TX_CHAR_UUID = "0000fff2-0000-1000-8000-00805f9b34fb";
 
+std::string bytes_to_hex_string(const uint8_t *data, size_t len) {
+  std::string hex_str;
+  hex_str.reserve(len * 3);  // Pre-allocate: "xx:" per byte
+  for (size_t i = 0; i < len; i++) {
+    char buf[4];
+    snprintf(buf, sizeof(buf), "%02x%s", data[i], (i < len - 1) ? ":" : "");
+    hex_str += buf;
+  }
+  return hex_str;
+}
+
 void CosoriKettleBLE::setup() {
   ESP_LOGCONFIG(TAG, "Setting up Cosori Kettle BLE...");
   // Initialize state
@@ -101,10 +112,19 @@ void CosoriKettleBLE::update() {
   // Process command state machine
   this->process_command_state_machine_();
 
-  // Send periodic status requests if connected and idle
-  if (this->command_state_ == CommandState::IDLE) {
-    this->send_status_request_();
+  if (this->command_state_ != CommandState::IDLE) {
+    return;
   }
+  
+  if (this->waiting_for_write_ack_) {
+    return;
+  }
+
+  if (this->send_chunk_index_ < this->send_total_chunks_) {
+    return;
+  }
+
+  this->send_status_request_();
 }
 
 void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_if_t gattc_if,
@@ -200,16 +220,9 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
         break;
 
       // Log full RX packet as hex dump (only when DEBUG level is enabled)
-      if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-        std::string hex_str;
-        hex_str.reserve(param->notify.value_len * 3);  // Pre-allocate: "xx:" per byte
-        for (uint16_t i = 0; i < param->notify.value_len; i++) {
-          char buf[4];
-          snprintf(buf, sizeof(buf), "%02x%s", param->notify.value[i], (i < param->notify.value_len - 1) ? ":" : "");
-          hex_str += buf;
-        }
-        ESP_LOGD(TAG, "RX: %s", hex_str.c_str());
-      }
+      // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+        ESP_LOGD(TAG, "RX: %s", bytes_to_hex_string(param->notify.value, param->notify.value_len).c_str());
+      // }
 
       // Check buffer size limit before appending
       if (recv_buffer.size() + param->notify.value_len > MAX_FRAME_BUFFER_SIZE) {
@@ -413,16 +426,9 @@ void CosoriKettleBLE::send_request_compact_status_(uint8_t seq_base) {
 // ============================================================================
 
 bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t payload_len, bool is_ack) {
-  if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    std::string hex_str;
-    hex_str.reserve(payload_len * 3);  // Pre-allocate: "xx:" per byte
-    for (size_t i = 0; i < payload_len; i++) {
-      char buf[4];
-      snprintf(buf, sizeof(buf), "%02x%s", payload[i], (i < payload_len - 1) ? ":" : "");
-      hex_str += buf;
-    }
-    ESP_LOGD(TAG, "Sending command: seq=%02x, payload=%s", seq, hex_str.c_str());
-  }
+  // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+    ESP_LOGD(TAG, "Sending command: seq=%02x, payload=%s", seq, bytes_to_hex_string(payload, payload_len).c_str());
+  // }
 
   if (this->tx_char_handle_ == 0) {
     ESP_LOGW(TAG, "TX characteristic not ready");
@@ -454,16 +460,9 @@ bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t p
   }
 
   // Log full TX packet as hex dump (only when DEBUG level is enabled)
-  if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    std::string hex_str;
-    hex_str.reserve(send_buffer.size() * 3);  // Pre-allocate: "xx:" per byte
-    for (size_t i = 0; i < send_buffer.size(); i++) {
-      char buf[4];
-      snprintf(buf, sizeof(buf), "%02x%s", send_buffer.data()[i], (i < send_buffer.size() - 1) ? ":" : "");
-      hex_str += buf;
-    }
-    ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
-  }
+  // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+    ESP_LOGD(TAG, "TX: %s", bytes_to_hex_string(send_buffer.data(), send_buffer.size()).c_str());
+  // }
 
   // Calculate total chunks needed
   this->send_total_chunks_ = send_buffer.get_chunk_count();
@@ -503,16 +502,9 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
   }
 
   // Log full TX packet as hex dump (only when DEBUG level is enabled)
-  if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    std::string hex_str;
-    hex_str.reserve(len * 3);  // Pre-allocate: "xx:" per byte
-    for (size_t i = 0; i < len; i++) {
-      char buf[4];
-      snprintf(buf, sizeof(buf), "%02x%s", data[i], (i < len - 1) ? ":" : "");
-      hex_str += buf;
-    }
-    ESP_LOGD(TAG, "TX: %s", hex_str.c_str());
-  }
+  // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+    ESP_LOGD(TAG, "TX: %s", bytes_to_hex_string(data, len).c_str());
+  // }
   
   // Calculate total chunks needed
   this->send_total_chunks_ = send_buffer.get_chunk_count();
@@ -547,6 +539,9 @@ void CosoriKettleBLE::send_next_chunk_() {
     this->waiting_for_write_ack_ = false;
     return;
   }
+  
+  // TODO: here
+  ESP_LOGD(TAG, "Sending chunk %zu/%zu", this->send_chunk_index_ + 1, this->send_total_chunks_);
 
   // Get current chunk data and size
   size_t chunk_size = 0;
@@ -597,16 +592,9 @@ void CosoriKettleBLE::process_frame_buffer_() {
     // Update last RX sequence
     this->last_rx_seq_ = frame.seq;
     
-    if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-      std::string hex_str;
-      hex_str.reserve(frame.payload_len * 3);  // Pre-allocate: "xx:" per byte
-      for (size_t i = 0; i < frame.payload_len; i++) {
-        char buf[4];
-        snprintf(buf, sizeof(buf), "%02x%s", frame.payload[i], (i < frame.payload_len - 1) ? ":" : "");
-        hex_str += buf;
-      }
-      ESP_LOGD(TAG, "Received frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, hex_str.c_str());
-    }
+    // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
+      ESP_LOGD(TAG, "Received frame: type=%02x, seq=%02x, payload=%s", frame.frame_type, frame.seq, bytes_to_hex_string(frame.payload, frame.payload_len).c_str());
+    // }
 
     if (frame.frame_type == MESSAGE_HEADER_TYPE && frame.payload[1] == CMD_CTRL) {
       this->parse_compact_status_(frame.payload, frame.payload_len);
