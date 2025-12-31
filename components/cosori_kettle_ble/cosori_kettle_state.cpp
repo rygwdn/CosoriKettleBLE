@@ -1,12 +1,13 @@
 #include "cosori_kettle_state.h"
+#include "cosori_kettle_state_log.h"
 #include "protocol.h"
 #include <cmath>
 #include <cstring>
-#include <cstdarg>
-#include <cstdio>
 
 namespace esphome {
 namespace cosori_kettle_ble {
+
+static const char *const TAG = "cosori_kettle_state";
 
 // Buffer size limits
 static constexpr size_t MAX_FRAME_BUFFER_SIZE = 512;
@@ -31,7 +32,6 @@ CosoriKettleState::CosoriKettleState()
   : config_(),
     state_(),
     send_data_callback_(nullptr),
-    log_callback_(nullptr),
     last_rx_seq_(0),
     tx_seq_(0),
     last_ack_error_code_(0),
@@ -57,7 +57,6 @@ CosoriKettleState::CosoriKettleState(const Config& config)
   : config_(config),
     state_(),
     send_data_callback_(nullptr),
-    log_callback_(nullptr),
     last_rx_seq_(0),
     tx_seq_(0),
     last_ack_error_code_(0),
@@ -94,37 +93,19 @@ void CosoriKettleState::reset() {
 }
 
 // ============================================================================
-// Logging
-// ============================================================================
-
-void CosoriKettleState::log(int level, const char* format, ...) {
-  if (!log_callback_) {
-    return;
-  }
-
-  char buffer[256];
-  va_list args;
-  va_start(args, format);
-  vsnprintf(buffer, sizeof(buffer), format, args);
-  va_end(args);
-
-  log_callback_(level, buffer);
-}
-
-// ============================================================================
 // Data Processing
 // ============================================================================
 
 void CosoriKettleState::process_rx_data(const uint8_t* data, size_t len) {
   // Check buffer size limit before appending
   if (recv_buffer_.size() + len > MAX_FRAME_BUFFER_SIZE) {
-    log(1, "Frame buffer overflow, clearing buffer");
+    ESP_LOGW(TAG, "Frame buffer overflow, clearing buffer");
     recv_buffer_.clear();
   }
 
   // Append to receive buffer
   if (!recv_buffer_.append(data, len)) {
-    log(1, "Failed to append to receive buffer, clearing");
+    ESP_LOGW(TAG, "Failed to append to receive buffer, clearing");
     recv_buffer_.clear();
   }
 
@@ -144,7 +125,7 @@ void CosoriKettleState::on_write_ack(bool success) {
     // Send next chunk if available
     send_next_chunk();
   } else {
-    log(1, "Write failed");
+    ESP_LOGW(TAG, "Write failed");
     send_chunk_index_ = 0;
     send_total_chunks_ = 0;
     waiting_for_write_ack_ = false;
@@ -196,13 +177,13 @@ void CosoriKettleState::set_target_setpoint(float temp_f) {
     temp_f = MAX_TEMP_F;
 
   state_.target_setpoint_f = temp_f;
-  log(2, "Target setpoint changed to %.0f°F", temp_f);
+  ESP_LOGI(TAG, "Target setpoint changed to %.0f°F", temp_f);
 }
 
 void CosoriKettleState::set_hold_time(uint16_t seconds) {
   state_.hold_time_seconds = seconds;
   pending_hold_time_ = true;
-  log(2, "Hold time changed to %u seconds", seconds);
+  ESP_LOGI(TAG, "Hold time changed to %u seconds", seconds);
 
   // Send command to device
   send_set_hold_time(seconds);
@@ -217,7 +198,7 @@ void CosoriKettleState::set_my_temp(uint8_t temp_f) {
 
   state_.my_temp_f = temp_f;
   pending_my_temp_ = true;
-  log(2, "My temp changed to %d°F", temp_f);
+  ESP_LOGI(TAG, "My temp changed to %d°F", temp_f);
 
   // Send command to device
   send_set_my_temp(temp_f);
@@ -226,7 +207,7 @@ void CosoriKettleState::set_my_temp(uint8_t temp_f) {
 void CosoriKettleState::set_baby_formula_enabled(bool enabled) {
   state_.baby_formula_enabled = enabled;
   pending_baby_formula_ = true;
-  log(2, "Baby formula mode changed to %s", enabled ? "enabled" : "disabled");
+  ESP_LOGI(TAG, "Baby formula mode changed to %s", enabled ? "enabled" : "disabled");
 
   // Send command to device
   send_set_baby_formula(enabled);
@@ -251,7 +232,7 @@ void CosoriKettleState::start_heating() {
     }
   }
 
-  log(2, "Starting kettle at %.0f°F using mode %d", state_.target_setpoint_f, mode);
+  ESP_LOGI(TAG, "Starting kettle at %.0f°F using mode %d", state_.target_setpoint_f, mode);
 
   // Store parameters and start state machine
   pending_temp_f_ = temp_f;
@@ -261,7 +242,7 @@ void CosoriKettleState::start_heating() {
 }
 
 void CosoriKettleState::stop_heating() {
-  log(2, "Stopping kettle");
+  ESP_LOGI(TAG, "Stopping kettle");
 
   // Start stop sequence state machine
   command_state_ = CommandState::STOP;
@@ -271,13 +252,13 @@ void CosoriKettleState::stop_heating() {
 void CosoriKettleState::send_hello(bool use_register_command) {
   // Verify registration key is set
   if (!config_.registration_key_set) {
-    log(0, "Registration key not set - cannot send hello/register command");
+    ESP_LOGE(TAG, "Registration key not set - cannot send hello/register command");
     return;
   }
 
   // Start handshake state machine
   use_register_command_ = use_register_command;
-  log(2, "Starting handshake (%s)", use_register_command ? "register" : "hello");
+  ESP_LOGI(TAG, "Starting handshake (%s)", use_register_command ? "register" : "hello");
   command_state_ = CommandState::HANDSHAKE_START;
   command_state_time_ = 0;  // Will be set by caller
 }
@@ -287,12 +268,12 @@ void CosoriKettleState::send_status_request() {
   uint8_t payload[4];
   size_t payload_len = build_status_request_payload(config_.protocol_version, payload);
   if (payload_len == 0) {
-    log(1, "Failed to build POLL payload");
+    ESP_LOGW(TAG, "Failed to build POLL payload");
     return;
   }
-  log(2, "Sending POLL (seq=%02x)", seq);
+  ESP_LOGI(TAG, "Sending POLL (seq=%02x)", seq);
   if (!send_command(seq, payload, payload_len)) {
-    log(1, "Failed to send POLL");
+    ESP_LOGW(TAG, "Failed to send POLL");
   }
 }
 
@@ -305,12 +286,12 @@ void CosoriKettleState::send_set_my_temp(uint8_t temp_f) {
   uint8_t payload[5];
   size_t payload_len = build_set_my_temp_payload(config_.protocol_version, temp_f, payload);
   if (payload_len == 0) {
-    log(1, "Failed to build set my temp payload");
+    ESP_LOGW(TAG, "Failed to build set my temp payload");
     return;
   }
-  log(2, "Sending set my temp %d°F (seq=%02x)", temp_f, seq);
+  ESP_LOGI(TAG, "Sending set my temp %d°F (seq=%02x)", temp_f, seq);
   if (!send_command(seq, payload, payload_len)) {
-    log(1, "Failed to send set my temp");
+    ESP_LOGW(TAG, "Failed to send set my temp");
   }
 }
 
@@ -319,12 +300,12 @@ void CosoriKettleState::send_set_baby_formula(bool enabled) {
   uint8_t payload[5];
   size_t payload_len = build_set_baby_formula_payload(config_.protocol_version, enabled, payload);
   if (payload_len == 0) {
-    log(1, "Failed to build set baby formula payload");
+    ESP_LOGW(TAG, "Failed to build set baby formula payload");
     return;
   }
-  log(2, "Sending set baby formula %s (seq=%02x)", enabled ? "enabled" : "disabled", seq);
+  ESP_LOGI(TAG, "Sending set baby formula %s (seq=%02x)", enabled ? "enabled" : "disabled", seq);
   if (!send_command(seq, payload, payload_len)) {
-    log(1, "Failed to send set baby formula");
+    ESP_LOGW(TAG, "Failed to send set baby formula");
   }
 }
 
@@ -333,12 +314,12 @@ void CosoriKettleState::send_set_hold_time(uint16_t seconds) {
   uint8_t payload[8];
   size_t payload_len = build_set_hold_time_payload(config_.protocol_version, seconds, payload);
   if (payload_len == 0) {
-    log(1, "Failed to build set hold time payload");
+    ESP_LOGW(TAG, "Failed to build set hold time payload");
     return;
   }
-  log(2, "Sending set hold time %u seconds (seq=%02x)", seconds, seq);
+  ESP_LOGI(TAG, "Sending set hold time %u seconds (seq=%02x)", seconds, seq);
   if (!send_command(seq, payload, payload_len)) {
-    log(1, "Failed to send set hold time");
+    ESP_LOGW(TAG, "Failed to send set hold time");
   }
 }
 
@@ -347,7 +328,7 @@ void CosoriKettleState::send_set_mode(uint8_t mode, uint8_t temp_f) {
   uint8_t payload[9];
   if (config_.protocol_version == 1) {
     if (mode == MODE_HEAT) {
-      log(1, "Cannot send set mode: HEAT mode not supported in V1");
+      ESP_LOGW(TAG, "Cannot send set mode: HEAT mode not supported in V1");
       mode = MODE_BOIL;
     }
     if (mode != MODE_MY_TEMP) {
@@ -357,12 +338,12 @@ void CosoriKettleState::send_set_mode(uint8_t mode, uint8_t temp_f) {
 
   size_t payload_len = build_set_mode_payload(config_.protocol_version, mode, temp_f, state_.hold_time_seconds, payload);
   if (payload_len == 0) {
-    log(1, "Failed to build set mode payload");
+    ESP_LOGW(TAG, "Failed to build set mode payload");
     return;
   }
-  log(2, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
+  ESP_LOGI(TAG, "Sending SETPOINT %d°F (seq=%02x, mode=%02x)", temp_f, seq, mode);
   if (!send_command(seq, payload, payload_len)) {
-    log(1, "Failed to send SETPOINT");
+    ESP_LOGW(TAG, "Failed to send SETPOINT");
   }
 }
 
@@ -371,12 +352,12 @@ void CosoriKettleState::send_stop() {
   uint8_t payload[4];
   size_t payload_len = build_stop_payload(config_.protocol_version, payload);
   if (payload_len == 0) {
-    log(1, "Failed to build stop payload");
+    ESP_LOGW(TAG, "Failed to build stop payload");
     return;
   }
-  log(2, "Sending STOP (seq=%02x)", seq);
+  ESP_LOGI(TAG, "Sending STOP (seq=%02x)", seq);
   if (!send_command(seq, payload, payload_len)) {
-    log(1, "Failed to send STOP");
+    ESP_LOGW(TAG, "Failed to send STOP");
   }
 }
 
@@ -384,23 +365,23 @@ void CosoriKettleState::send_request_compact_status(uint8_t seq_base) {
   uint8_t payload[4];
   size_t payload_len = build_compact_status_request_payload(config_.protocol_version, payload);
   if (payload_len == 0) {
-    log(1, "Failed to build compact status request payload");
+    ESP_LOGW(TAG, "Failed to build compact status request payload");
     return;
   }
-  log(2, "Sending request compact status (seq=%02x)", seq_base);
+  ESP_LOGI(TAG, "Sending request compact status (seq=%02x)", seq_base);
   if (!send_command(seq_base, payload, payload_len, true)) {
-    log(1, "Failed to send request compact status");
+    ESP_LOGW(TAG, "Failed to send request compact status");
   }
 }
 
 bool CosoriKettleState::send_command(uint8_t seq, const uint8_t* payload, size_t payload_len, bool is_ack) {
   // Check if already sending something or waiting
   if (waiting_for_write_ack_) {
-    log(1, "Cannot send command: already waiting for write acknowledgment");
+    ESP_LOGW(TAG, "Cannot send command: already waiting for write acknowledgment");
     return false;
   }
   if (send_chunk_index_ < send_total_chunks_) {
-    log(1, "Cannot send command: already sending (chunk %zu/%zu)", send_chunk_index_, send_total_chunks_);
+    ESP_LOGW(TAG, "Cannot send command: already sending (chunk %zu/%zu)", send_chunk_index_, send_total_chunks_);
     return false;
   }
 
@@ -413,7 +394,7 @@ bool CosoriKettleState::send_command(uint8_t seq, const uint8_t* payload, size_t
   }
 
   if (!success) {
-    log(1, "Failed to set payload in send buffer");
+    ESP_LOGW(TAG, "Failed to set payload in send buffer");
     return false;
   }
 
@@ -421,7 +402,7 @@ bool CosoriKettleState::send_command(uint8_t seq, const uint8_t* payload, size_t
   send_total_chunks_ = send_buffer_.get_chunk_count();
 
   if (send_total_chunks_ == 0) {
-    log(1, "No chunks to send");
+    ESP_LOGW(TAG, "No chunks to send");
     return false;
   }
 
@@ -449,7 +430,7 @@ void CosoriKettleState::send_next_chunk() {
   const uint8_t* chunk_data = send_buffer_.get_chunk_data(send_chunk_index_, chunk_size);
 
   if (chunk_data == nullptr || chunk_size == 0) {
-    log(1, "Invalid chunk data at index %zu", send_chunk_index_);
+    ESP_LOGW(TAG, "Invalid chunk data at index %zu", send_chunk_index_);
     send_chunk_index_ = 0;
     send_total_chunks_ = 0;
     waiting_for_write_ack_ = false;
@@ -461,7 +442,7 @@ void CosoriKettleState::send_next_chunk() {
   if (send_data_callback_) {
     send_data_callback_(chunk_data, chunk_size);
   } else {
-    log(1, "No send data callback set");
+    ESP_LOGW(TAG, "No send data callback set");
     waiting_for_write_ack_ = false;
   }
 }
@@ -489,22 +470,22 @@ void CosoriKettleState::process_frame_buffer() {
       if (waiting_for_ack_complete_ && waiting_for_ack_seq_ == frame.seq) {
         waiting_for_ack_complete_ = false;
         last_ack_error_code_ = ack_status;
-        log(2, "ACK complete: seq=%02x, error_code=%02x", frame.seq, ack_status);
+        ESP_LOGI(TAG, "ACK complete: seq=%02x, error_code=%02x", frame.seq, ack_status);
       }
 
       if (pending_baby_formula_ && frame.payload[1] == CMD_SET_BABY_FORMULA) {
         pending_baby_formula_ = false;
-        log(2, "Baby formula update confirmed: %d", ack_status);
+        ESP_LOGI(TAG, "Baby formula update confirmed: %d", ack_status);
       }
 
       if (pending_hold_time_ && frame.payload[1] == CMD_SET_HOLD_TIME) {
         pending_hold_time_ = false;
-        log(2, "Hold time update confirmed: %d", ack_status);
+        ESP_LOGI(TAG, "Hold time update confirmed: %d", ack_status);
       }
 
       if (pending_my_temp_ && frame.payload[1] == CMD_SET_MY_TEMP) {
         pending_my_temp_ = false;
-        log(2, "My temp update confirmed: %d", ack_status);
+        ESP_LOGI(TAG, "My temp update confirmed: %d", ack_status);
       }
     }
 
@@ -588,168 +569,205 @@ void CosoriKettleState::process_command_state_machine(uint32_t now_ms) {
 
   const auto initial_state = command_state_;
   if (initial_state != CommandState::IDLE && elapsed) {
-    log(2, "Running command state machine in state %d", static_cast<int>(initial_state));
+    ESP_LOGI(TAG, "Running command state machine in state %d", static_cast<int>(initial_state));
   }
 
+  // Dispatch to state handler
   switch (command_state_) {
     case CommandState::IDLE:
       // Nothing to do
       break;
-
-    case CommandState::HANDSHAKE_START: {
-      uint8_t payload[36];
-      size_t payload_len;
-
-      // Use register or hello command based on flag
-      if (use_register_command_) {
-        payload_len = build_register_payload(config_.protocol_version,
-                                             config_.registration_key,
-                                             payload);
-        if (payload_len == 0) {
-          log(1, "Failed to build register payload");
-          command_state_ = CommandState::IDLE;
-          break;
-        }
-      } else {
-        payload_len = build_hello_payload(config_.protocol_version,
-                                          config_.registration_key,
-                                          payload);
-        if (payload_len == 0) {
-          log(1, "Failed to build hello payload");
-          command_state_ = CommandState::IDLE;
-          break;
-        }
-      }
-
-      // Send command using send_command (seq=0 for handshake)
-      const uint8_t sequence_number = 0;
-      if (!send_command(sequence_number, payload, payload_len)) {
-        log(1, "Failed to send %s command", use_register_command_ ? "register" : "hello");
-        command_state_ = CommandState::IDLE;
-        break;
-      }
-
-      waiting_for_ack_seq_ = sequence_number;
-      waiting_for_ack_complete_ = true;
-
-      // Wait for all chunks to be sent before proceeding to poll
-      command_state_ = CommandState::HANDSHAKE_WAIT_CHUNKS;
-      command_state_time_ = now_ms;
+    case CommandState::HANDSHAKE_START:
+      handle_handshake_start(now_ms);
       break;
-    }
-
     case CommandState::HANDSHAKE_WAIT_CHUNKS:
-      if (!waiting_for_ack_complete_ && !waiting_for_write_ack_ && send_chunk_index_ >= send_total_chunks_) {
-        command_state_ = CommandState::HANDSHAKE_POLL;
-        command_state_time_ = now_ms;
-      }
-      if (elapsed >= HANDSHAKE_TIMEOUT_MS) {
-        log(0, "Handshake timeout");
-        command_state_ = CommandState::IDLE;
-        break;
-      }
+      handle_handshake_wait_chunks(now_ms, elapsed);
       break;
-
     case CommandState::HANDSHAKE_POLL:
-      if (!waiting_for_ack_complete_) {
-        if (last_ack_error_code_ != 0) {
-          log(0, "Error in %s: %d", use_register_command_ ? "registration" : "handshake", last_ack_error_code_);
-          command_state_ = CommandState::IDLE;
-          break;
-        }
-
-        send_status_request();
-        command_state_ = CommandState::IDLE;
-        log(2, "%s complete", use_register_command_ ? "Device registration" : "Registration handshake");
-      }
-      if (elapsed >= HANDSHAKE_TIMEOUT_MS) {
-        log(0, "Handshake timeout");
-        command_state_ = CommandState::IDLE;
-        break;
-      }
+      handle_handshake_poll(now_ms, elapsed);
       break;
-
     case CommandState::HEAT_SET_TEMP:
-      if (elapsed >= PRE_SETPOINT_DELAY_MS) {
-        if (config_.protocol_version != 1 || pending_mode_ != MODE_MY_TEMP) {
-          command_state_ = CommandState::HEAT_START;
-          break;
-        }
-
-        send_set_my_temp(pending_temp_f_);
-        command_state_ = CommandState::HEAT_START;
-        command_state_time_ = now_ms;
-      }
+      handle_heat_set_temp(now_ms, elapsed);
       break;
-
     case CommandState::HEAT_START:
-      if (elapsed >= PRE_SETPOINT_DELAY_MS && !pending_my_temp_) {
-        send_set_mode(pending_mode_, pending_temp_f_);
-        const auto next_state = config_.protocol_version == 1 ? CommandState::HEAT_COMPLETE : CommandState::HEAT_POLL;
-        command_state_ = next_state;
-        command_state_time_ = now_ms;
-      }
+      handle_heat_start(now_ms, elapsed);
       break;
-
     case CommandState::HEAT_POLL:
-      if (elapsed >= POST_SETPOINT_DELAY_MS) {
-        // Proceed to control even if no status (timeout after POST_SETPOINT_DELAY_MS)
-        uint8_t seq_base = (last_status_seq_ != 0) ? last_status_seq_ : last_rx_seq_;
-        send_request_compact_status(seq_base);
-        command_state_ = CommandState::HEAT_POLL_REPEAT;
-        command_state_time_ = now_ms;
-      }
+      handle_heat_poll(now_ms, elapsed);
       break;
-
     case CommandState::HEAT_POLL_REPEAT:
-      if (elapsed >= CONTROL_DELAY_MS) {
-        uint8_t seq_ack = next_tx_seq();
-        send_request_compact_status(seq_ack);
-        command_state_ = CommandState::HEAT_COMPLETE;
-        command_state_time_ = now_ms;
-      }
+      handle_heat_poll_repeat(now_ms, elapsed);
       break;
-
     case CommandState::HEAT_COMPLETE:
-      if (elapsed >= CONTROL_DELAY_MS) {
-        command_state_ = CommandState::IDLE;
-        log(3, "Start heating sequence complete");
-      }
+      handle_heat_complete(now_ms, elapsed);
       break;
-
     case CommandState::STOP:
-      send_stop();
-      command_state_ = CommandState::STOP_POLL;
-      command_state_time_ = now_ms;
+      handle_stop(now_ms);
       break;
-
     case CommandState::STOP_POLL:
-      if (elapsed >= CONTROL_DELAY_MS) {
-        uint8_t seq_ctrl = (last_status_seq_ != 0) ? last_status_seq_ : last_rx_seq_;
-        send_request_compact_status(seq_ctrl);
-        command_state_ = CommandState::STOP_REPEAT;
-        command_state_time_ = now_ms;
-      }
+      handle_stop_poll(now_ms, elapsed);
       break;
-
     case CommandState::STOP_REPEAT:
-      if (elapsed >= CONTROL_DELAY_MS) {
-        send_stop();
-        command_state_ = CommandState::IDLE;
-        log(3, "Stop heating sequence complete");
-      }
+      handle_stop_repeat(now_ms, elapsed);
       break;
   }
 
+  // Handle state transitions
   if (command_state_ != initial_state) {
-    log(3, "Command state changed from %d to %d", static_cast<int>(initial_state), static_cast<int>(command_state_));
+    ESP_LOGD(TAG, "Command state changed from %d to %d", static_cast<int>(initial_state), static_cast<int>(command_state_));
     // Recursively process state machine if state changed
     process_command_state_machine(now_ms);
   }
 
+  // Timeout protection
   if (command_state_ != CommandState::IDLE && command_state_ == initial_state && elapsed >= IDLE_TIMEOUT_MS) {
-    log(0, "Idle timeout from %d to IDLE", static_cast<int>(initial_state));
+    ESP_LOGE(TAG, "Idle timeout from %d to IDLE", static_cast<int>(initial_state));
     command_state_ = CommandState::IDLE;
+  }
+}
+
+// ============================================================================
+// State Machine Handlers
+// ============================================================================
+
+void CosoriKettleState::handle_handshake_start(uint32_t now_ms) {
+  uint8_t payload[36];
+  size_t payload_len;
+
+  // Use register or hello command based on flag
+  if (use_register_command_) {
+    payload_len = build_register_payload(config_.protocol_version,
+                                         config_.registration_key,
+                                         payload);
+    if (payload_len == 0) {
+      ESP_LOGW(TAG, "Failed to build register payload");
+      command_state_ = CommandState::IDLE;
+      return;
+    }
+  } else {
+    payload_len = build_hello_payload(config_.protocol_version,
+                                      config_.registration_key,
+                                      payload);
+    if (payload_len == 0) {
+      ESP_LOGW(TAG, "Failed to build hello payload");
+      command_state_ = CommandState::IDLE;
+      return;
+    }
+  }
+
+  // Send command using send_command (seq=0 for handshake)
+  const uint8_t sequence_number = 0;
+  if (!send_command(sequence_number, payload, payload_len)) {
+    ESP_LOGW(TAG, "Failed to send %s command", use_register_command_ ? "register" : "hello");
+    command_state_ = CommandState::IDLE;
+    return;
+  }
+
+  waiting_for_ack_seq_ = sequence_number;
+  waiting_for_ack_complete_ = true;
+
+  // Wait for all chunks to be sent before proceeding to poll
+  command_state_ = CommandState::HANDSHAKE_WAIT_CHUNKS;
+  command_state_time_ = now_ms;
+}
+
+void CosoriKettleState::handle_handshake_wait_chunks(uint32_t now_ms, uint32_t elapsed) {
+  if (!waiting_for_ack_complete_ && !waiting_for_write_ack_ && send_chunk_index_ >= send_total_chunks_) {
+    command_state_ = CommandState::HANDSHAKE_POLL;
+    command_state_time_ = now_ms;
+  }
+  if (elapsed >= HANDSHAKE_TIMEOUT_MS) {
+    ESP_LOGE(TAG, "Handshake timeout");
+    command_state_ = CommandState::IDLE;
+  }
+}
+
+void CosoriKettleState::handle_handshake_poll(uint32_t now_ms, uint32_t elapsed) {
+  if (!waiting_for_ack_complete_) {
+    if (last_ack_error_code_ != 0) {
+      ESP_LOGE(TAG, "Error in %s: %d", use_register_command_ ? "registration" : "handshake", last_ack_error_code_);
+      command_state_ = CommandState::IDLE;
+      return;
+    }
+
+    send_status_request();
+    command_state_ = CommandState::IDLE;
+    ESP_LOGI(TAG, "%s complete", use_register_command_ ? "Device registration" : "Registration handshake");
+  }
+  if (elapsed >= HANDSHAKE_TIMEOUT_MS) {
+    ESP_LOGE(TAG, "Handshake timeout");
+    command_state_ = CommandState::IDLE;
+  }
+}
+
+void CosoriKettleState::handle_heat_set_temp(uint32_t now_ms, uint32_t elapsed) {
+  if (elapsed >= PRE_SETPOINT_DELAY_MS) {
+    if (config_.protocol_version != 1 || pending_mode_ != MODE_MY_TEMP) {
+      command_state_ = CommandState::HEAT_START;
+      return;
+    }
+
+    send_set_my_temp(pending_temp_f_);
+    command_state_ = CommandState::HEAT_START;
+    command_state_time_ = now_ms;
+  }
+}
+
+void CosoriKettleState::handle_heat_start(uint32_t now_ms, uint32_t elapsed) {
+  if (elapsed >= PRE_SETPOINT_DELAY_MS && !pending_my_temp_) {
+    send_set_mode(pending_mode_, pending_temp_f_);
+    const auto next_state = config_.protocol_version == 1 ? CommandState::HEAT_COMPLETE : CommandState::HEAT_POLL;
+    command_state_ = next_state;
+    command_state_time_ = now_ms;
+  }
+}
+
+void CosoriKettleState::handle_heat_poll(uint32_t now_ms, uint32_t elapsed) {
+  if (elapsed >= POST_SETPOINT_DELAY_MS) {
+    // Proceed to control even if no status (timeout after POST_SETPOINT_DELAY_MS)
+    uint8_t seq_base = (last_status_seq_ != 0) ? last_status_seq_ : last_rx_seq_;
+    send_request_compact_status(seq_base);
+    command_state_ = CommandState::HEAT_POLL_REPEAT;
+    command_state_time_ = now_ms;
+  }
+}
+
+void CosoriKettleState::handle_heat_poll_repeat(uint32_t now_ms, uint32_t elapsed) {
+  if (elapsed >= CONTROL_DELAY_MS) {
+    uint8_t seq_ack = next_tx_seq();
+    send_request_compact_status(seq_ack);
+    command_state_ = CommandState::HEAT_COMPLETE;
+    command_state_time_ = now_ms;
+  }
+}
+
+void CosoriKettleState::handle_heat_complete(uint32_t now_ms, uint32_t elapsed) {
+  if (elapsed >= CONTROL_DELAY_MS) {
+    command_state_ = CommandState::IDLE;
+    ESP_LOGD(TAG, "Start heating sequence complete");
+  }
+}
+
+void CosoriKettleState::handle_stop(uint32_t now_ms) {
+  send_stop();
+  command_state_ = CommandState::STOP_POLL;
+  command_state_time_ = now_ms;
+}
+
+void CosoriKettleState::handle_stop_poll(uint32_t now_ms, uint32_t elapsed) {
+  if (elapsed >= CONTROL_DELAY_MS) {
+    uint8_t seq_ctrl = (last_status_seq_ != 0) ? last_status_seq_ : last_rx_seq_;
+    send_request_compact_status(seq_ctrl);
+    command_state_ = CommandState::STOP_REPEAT;
+    command_state_time_ = now_ms;
+  }
+}
+
+void CosoriKettleState::handle_stop_repeat(uint32_t now_ms, uint32_t elapsed) {
+  if (elapsed >= CONTROL_DELAY_MS) {
+    send_stop();
+    command_state_ = CommandState::IDLE;
+    ESP_LOGD(TAG, "Stop heating sequence complete");
   }
 }
 
@@ -769,7 +787,7 @@ void CosoriKettleState::track_online_status() {
   }
 
   if (state_.no_response_count >= NO_RESPONSE_THRESHOLD && state_.status_received) {
-    log(1, "No response from kettle, marking offline");
+    ESP_LOGW(TAG, "No response from kettle, marking offline");
     state_.status_received = false;
   }
 }

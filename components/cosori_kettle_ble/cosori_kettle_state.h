@@ -39,9 +39,6 @@ class CosoriKettleState {
   // Callback for sending BLE data chunks
   using SendDataCallback = std::function<void(const uint8_t* data, size_t len)>;
 
-  // Callback for logging (level: 0=ERROR, 1=WARN, 2=INFO, 3=DEBUG, 4=VERBOSE)
-  using LogCallback = std::function<void(int level, const char* message)>;
-
   // ============================================================================
   // Kettle State Structure
   // ============================================================================
@@ -109,7 +106,6 @@ class CosoriKettleState {
   CosoriKettleState(const Config& config);
 
   void set_send_data_callback(SendDataCallback callback) { send_data_callback_ = callback; }
-  void set_log_callback(LogCallback callback) { log_callback_ = callback; }
 
   // Update configuration
   void set_registration_key(const std::array<uint8_t, 16>& key);
@@ -196,7 +192,6 @@ class CosoriKettleState {
 
   // Callbacks
   SendDataCallback send_data_callback_;
-  LogCallback log_callback_;
 
   // Protocol state
   uint8_t last_rx_seq_;
@@ -259,11 +254,18 @@ class CosoriKettleState {
   void process_command_state_machine(uint32_t now_ms);
   uint8_t next_tx_seq();
 
-  // ============================================================================
-  // Internal Methods - Logging
-  // ============================================================================
-
-  void log(int level, const char* format, ...);
+  // State machine handlers
+  void handle_handshake_start(uint32_t now_ms);
+  void handle_handshake_wait_chunks(uint32_t now_ms, uint32_t elapsed);
+  void handle_handshake_poll(uint32_t now_ms, uint32_t elapsed);
+  void handle_heat_set_temp(uint32_t now_ms, uint32_t elapsed);
+  void handle_heat_start(uint32_t now_ms, uint32_t elapsed);
+  void handle_heat_poll(uint32_t now_ms, uint32_t elapsed);
+  void handle_heat_poll_repeat(uint32_t now_ms, uint32_t elapsed);
+  void handle_heat_complete(uint32_t now_ms, uint32_t elapsed);
+  void handle_stop(uint32_t now_ms);
+  void handle_stop_poll(uint32_t now_ms, uint32_t elapsed);
+  void handle_stop_repeat(uint32_t now_ms, uint32_t elapsed);
 };
 
 }  // namespace cosori_kettle_ble

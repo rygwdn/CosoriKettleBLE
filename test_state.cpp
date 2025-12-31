@@ -39,11 +39,9 @@ std::string bytes_to_hex(const uint8_t* data, size_t len) {
 class TestContext {
 public:
     std::vector<std::vector<uint8_t>> sent_packets;
-    std::vector<std::string> log_messages;
 
     void clear() {
         sent_packets.clear();
-        log_messages.clear();
     }
 };
 
@@ -87,10 +85,6 @@ void test_rx_status_processing() {
     state.set_send_data_callback([&ctx](const uint8_t* data, size_t len) {
         std::vector<uint8_t> packet(data, data + len);
         ctx.sent_packets.push_back(packet);
-    });
-
-    state.set_log_callback([&ctx](int level, const char* message) {
-        ctx.log_messages.push_back(message);
     });
 
     // Test 1: Process compact status packet (kettle idle at 143°F, setpoint 179°F)
@@ -159,10 +153,6 @@ void test_command_generation() {
     state.set_send_data_callback([&ctx](const uint8_t* data, size_t len) {
         std::vector<uint8_t> packet(data, data + len);
         ctx.sent_packets.push_back(packet);
-    });
-
-    state.set_log_callback([&ctx](int level, const char* message) {
-        ctx.log_messages.push_back(message);
     });
 
     // Test 1: Send hello command
@@ -257,10 +247,6 @@ void test_heating_sequence() {
     state.set_send_data_callback([&ctx](const uint8_t* data, size_t len) {
         std::vector<uint8_t> packet(data, data + len);
         ctx.sent_packets.push_back(packet);
-    });
-
-    state.set_log_callback([&ctx](int level, const char* message) {
-        ctx.log_messages.push_back(message);
     });
 
     // Set target temperature to boil (212°F)

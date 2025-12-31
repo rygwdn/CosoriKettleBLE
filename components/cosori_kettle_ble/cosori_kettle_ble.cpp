@@ -44,10 +44,6 @@ void CosoriKettleBLE::setup() {
     this->send_ble_data_(data, len);
   });
 
-  kettle_state_.set_log_callback([this](int level, const char* message) {
-    this->log_message_(level, message);
-  });
-
   // Initialize BLE connection switch to ON (enabled by default)
   if (this->ble_connection_switch_ != nullptr) {
     this->ble_connection_switch_->publish_state(true);
@@ -210,17 +206,6 @@ void CosoriKettleBLE::send_ble_data_(const uint8_t* data, size_t len) {
     #ifdef ESPHOME_LOG_HAS_DEBUG
       ESP_LOGD(TAG, "Sent BLE data (%zu bytes): %s", len, bytes_to_hex_string(data, len).c_str());
     #endif
-  }
-}
-
-void CosoriKettleBLE::log_message_(int level, const char* message) {
-  switch (level) {
-    case 0: ESP_LOGE(TAG, "%s", message); break;
-    case 1: ESP_LOGW(TAG, "%s", message); break;
-    case 2: ESP_LOGI(TAG, "%s", message); break;
-    case 3: ESP_LOGD(TAG, "%s", message); break;
-    case 4: ESP_LOGV(TAG, "%s", message); break;
-    default: ESP_LOGI(TAG, "%s", message); break;
   }
 }
 

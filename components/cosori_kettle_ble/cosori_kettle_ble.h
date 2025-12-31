@@ -101,7 +101,6 @@ class CosoriKettleBLE : public esphome::ble_client::BLEClientNode, public Pollin
 
   // Platform-specific methods
   void send_ble_data_(const uint8_t* data, size_t len);
-  void log_message_(int level, const char* message);
 
   // Entity update methods
   void update_entities_();
