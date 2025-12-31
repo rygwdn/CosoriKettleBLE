@@ -211,6 +211,7 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
           this->send_total_chunks_ = 0;
           this->waiting_for_write_ack_ = false;
         }
+        this->process_command_state_machine_();
       }
       break;
     }
@@ -239,6 +240,7 @@ void CosoriKettleBLE::gattc_event_handler(esp_gattc_cb_event_t event, esp_gatt_i
 
       // Process complete frames
       this->process_frame_buffer_();
+      this->process_command_state_machine_();
       break;
     }
 
@@ -461,7 +463,7 @@ bool CosoriKettleBLE::send_command(uint8_t seq, const uint8_t *payload, size_t p
 
   // Log full TX packet as hex dump (only when DEBUG level is enabled)
   // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    ESP_LOGD(TAG, "TX: %s", bytes_to_hex_string(send_buffer.data(), send_buffer.size()).c_str());
+    // ESP_LOGD(TAG, "TX: %s", bytes_to_hex_string(send_buffer.data(), send_buffer.size()).c_str());
   // }
 
   // Calculate total chunks needed
@@ -503,7 +505,7 @@ void CosoriKettleBLE::send_packet_(const uint8_t *data, size_t len) {
 
   // Log full TX packet as hex dump (only when DEBUG level is enabled)
   // if (esp_log_level_get(TAG) >= ESP_LOG_DEBUG) {
-    ESP_LOGD(TAG, "TX: %s", bytes_to_hex_string(data, len).c_str());
+    // ESP_LOGD(TAG, "TX: %s", bytes_to_hex_string(data, len).c_str());
   // }
   
   // Calculate total chunks needed
@@ -540,9 +542,6 @@ void CosoriKettleBLE::send_next_chunk_() {
     return;
   }
   
-  // TODO: here
-  ESP_LOGD(TAG, "Sending chunk %zu/%zu", this->send_chunk_index_ + 1, this->send_total_chunks_);
-
   // Get current chunk data and size
   size_t chunk_size = 0;
   const uint8_t *chunk_data = send_buffer.get_chunk_data(this->send_chunk_index_, chunk_size);
@@ -565,12 +564,12 @@ void CosoriKettleBLE::send_next_chunk_() {
                                           const_cast<uint8_t *>(chunk_data),
                                           ESP_GATT_WRITE_TYPE_NO_RSP, ESP_GATT_AUTH_REQ_NONE);
   if (status) {
-    ESP_LOGW(TAG, "Error sending chunk %zu/%zu, status=%d", current_chunk, this->send_total_chunks_, status);
+    ESP_LOGW(TAG, "Error sending chunk %zu/%zu, status=%d: %s", current_chunk, this->send_total_chunks_, status, bytes_to_hex_string(chunk_data, chunk_size).c_str());
     this->send_chunk_index_ = 0;
     this->send_total_chunks_ = 0;
     this->waiting_for_write_ack_ = false;
   } else {
-    ESP_LOGD(TAG, "Sent chunk %zu/%zu (%zu bytes)", current_chunk, this->send_total_chunks_, chunk_size);
+    ESP_LOGD(TAG, "Sent chunk %zu/%zu (%zu bytes): %s", current_chunk, this->send_total_chunks_, chunk_size, bytes_to_hex_string(chunk_data, chunk_size).c_str());
   }
 }
 
@@ -1073,6 +1072,8 @@ void CosoriKettleBLE::process_command_state_machine_() {
   uint32_t now = millis();
   uint32_t elapsed = now - this->command_state_time_;
 
+  const auto initial_state = this->command_state_;
+
   switch (this->command_state_) {
     case CommandState::IDLE:
       // Nothing to do
@@ -1226,6 +1227,10 @@ void CosoriKettleBLE::process_command_state_machine_() {
         ESP_LOGD(TAG, "Stop heating sequence complete");
       }
       break;
+  }
+  
+  if (this->command_state_ != initial_state) {
+    ESP_LOGD(TAG, "Command state changed from %d to %d", initial_state, this->command_state_);
   }
 }
 
