@@ -1,6 +1,8 @@
 #include "protocol.h"
 #include <cstring>
 
+#ifdef USE_ESP32
+
 namespace esphome {
 namespace cosori_kettle_ble {
 
@@ -229,3 +231,5 @@ ExtendedStatus parse_extended_status(const uint8_t *payload, size_t len) {
 
 }  // namespace cosori_kettle_ble
 }  // namespace esphome
+
+#endif  // USE_ESP32
