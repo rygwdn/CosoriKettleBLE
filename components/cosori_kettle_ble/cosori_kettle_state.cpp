@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstring>
 
+#ifdef USE_ESP32
+
 namespace esphome {
 namespace cosori_kettle_ble {
 
@@ -817,3 +819,5 @@ void CosoriKettleState::reset_online_status() {
 
 }  // namespace cosori_kettle_ble
 }  // namespace esphome
+
+#endif  // USE_ESP32
