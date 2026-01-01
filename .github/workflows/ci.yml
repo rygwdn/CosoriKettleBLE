@@ -26,8 +26,8 @@ jobs:
     - name: Run C++ tests
       run: make test
 
-  esphome-validation:
-    name: ESPHome Validation
+  esphome-build:
+    name: ESPHome Build
     runs-on: ubuntu-latest
 
     steps:
@@ -47,3 +47,6 @@ jobs:
 
     - name: Validate ESPHome config
       run: uv run esphome config cosori-kettle.build.yaml
+
+    - name: Compile ESPHome firmware
+      run: uv run esphome compile cosori-kettle.build.yaml

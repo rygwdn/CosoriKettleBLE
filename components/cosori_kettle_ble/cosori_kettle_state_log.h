@@ -1,13 +1,9 @@
 #pragma once
 
 // Logging macros that work both with and without ESPHome
-#ifdef ESPHOME_LOG_H_
-  // ESPHome is available, use its logging
-  #include "esphome/core/log.h"
-#else
-  // ESPHome not available, define our own logging macros
+// Only define these macros if they're not already defined
+#ifndef ESP_LOGE
   #include <cstdio>
-
   #define ESP_LOGE(tag, format, ...) printf("[E][%s] " format "\n", tag, ##__VA_ARGS__)
   #define ESP_LOGW(tag, format, ...) printf("[W][%s] " format "\n", tag, ##__VA_ARGS__)
   #define ESP_LOGI(tag, format, ...) printf("[I][%s] " format "\n", tag, ##__VA_ARGS__)
