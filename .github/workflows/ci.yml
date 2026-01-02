@@ -24,7 +24,31 @@ jobs:
       run: make
 
     - name: Run C++ tests
-      run: make test
+      run: make test-cpp
+
+  python-tests:
+    name: Python Protocol Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+
+    - name: Create venv and install test dependencies
+      run: |
+        uv venv
+        uv pip install pytest pytest-asyncio
+
+    - name: Run Python protocol tests
+      run: make test-pytest
 
   esphome-build:
     name: ESPHome Build

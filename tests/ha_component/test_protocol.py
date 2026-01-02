@@ -1,7 +1,7 @@
 """Test protocol implementation (ported from C++ tests)."""
 import pytest
 
-from protocol import (
+from cosori_kettle_ble.protocol import (
     CompactStatus,
     Envelope,
     ExtendedStatus,
@@ -17,7 +17,7 @@ from protocol import (
     parse_compact_status,
     parse_extended_status,
 )
-from const import (
+from cosori_kettle_ble.const import (
     PROTOCOL_VERSION_V0,
     PROTOCOL_VERSION_V1,
 )
