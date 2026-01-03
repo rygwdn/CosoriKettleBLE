@@ -17,5 +17,5 @@ sys.modules['bleak_retry_connector'] = MagicMock()
 sys.modules['voluptuous'] = MagicMock()
 
 # Add project root to path so custom_components can be imported
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
