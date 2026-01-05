@@ -8,12 +8,18 @@ from typing import Callable
 from bleak.backends.device import BLEDevice
 
 from .client import CosoriKettleBLEClient
+from .exceptions import (
+    DeviceNotInPairingModeError,
+    InvalidRegistrationKeyError,
+    ProtocolError,
+)
 from .protocol import (
     ACK_HEADER_TYPE,
     PROTOCOL_VERSION_V1,
     ExtendedStatus,
     Frame,
     build_hello_frame,
+    build_register_frame,
     build_set_baby_formula_frame,
     build_set_mode_frame,
     build_set_my_temp_frame,
@@ -43,7 +49,7 @@ class CosoriKettle:
     def __init__(
         self,
         ble_device: BLEDevice,
-        mac_address: str,
+        registration_key: bytes,
         protocol_version: int = PROTOCOL_VERSION_V1,
         status_callback: Callable[[ExtendedStatus], None] | None = None,
     ):
@@ -51,12 +57,18 @@ class CosoriKettle:
 
         Args:
             ble_device: BLE device object
-            mac_address: MAC address (used as registration key)
+            registration_key: 16-byte registration key for authentication
             protocol_version: Protocol version to use
             status_callback: Optional callback for status updates
+
+        Raises:
+            ValueError: If registration key is not exactly 16 bytes
         """
+        if len(registration_key) != 16:
+            raise ValueError("Registration key must be exactly 16 bytes")
+
         self._protocol_version = protocol_version
-        self._registration_key = bytes.fromhex(mac_address.replace(":", ""))
+        self._registration_key = registration_key
         self._status_callback = status_callback
         self._tx_seq = 0
         self._current_status: ExtendedStatus | None = None
@@ -113,6 +125,25 @@ class CosoriKettle:
         # Initial status request
         await self.update_status()
 
+    async def pair(self) -> None:
+        """Pair with the kettle using registration key.
+
+        This should be called during initial setup when the device
+        is in pairing mode.
+
+        Raises:
+            DeviceNotInPairingModeError: Device not in pairing mode
+            RuntimeError: Not connected to device
+        """
+        if not self.is_connected:
+            raise RuntimeError("Must connect to device before pairing")
+
+        await self._send_register()
+        # After successful registration, send hello
+        await self._send_hello()
+        # Initial status request
+        await self.update_status()
+
     async def disconnect(self) -> None:
         """Disconnect from the kettle."""
         await self._client.disconnect()
@@ -131,10 +162,48 @@ class CosoriKettle:
                 self._status_callback(status)
 
     async def _send_hello(self) -> None:
-        """Send hello packet."""
+        """Send hello packet for reconnection.
+
+        Raises:
+            InvalidRegistrationKeyError: If key is rejected (status=1)
+            ProtocolError: Other protocol errors
+        """
         frame = build_hello_frame(self._protocol_version, self._registration_key, self._tx_seq)
         self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+
+        try:
+            await self._client.send_frame(frame)
+        except ProtocolError as err:
+            if err.status_code == 1:
+                raise InvalidRegistrationKeyError(
+                    "Registration key was rejected. Please reconfigure the device with the correct key.",
+                    status_code=1,
+                ) from err
+            raise
+
+    async def _send_register(self) -> None:
+        """Send register packet for initial pairing.
+
+        Raises:
+            DeviceNotInPairingModeError: If device not in pairing mode (status=1)
+            ProtocolError: Other protocol errors
+        """
+        frame = build_register_frame(
+            self._protocol_version,
+            self._registration_key,
+            self._tx_seq,
+        )
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+
+        try:
+            await self._client.send_frame(frame)
+        except ProtocolError as err:
+            if err.status_code == 1:
+                raise DeviceNotInPairingModeError(
+                    "Device is not in pairing mode. Please put the device into pairing mode and try again.",
+                    status_code=1,
+                ) from err
+            raise
 
     async def update_status(self) -> ExtendedStatus | None:
         """Request status update from the kettle.

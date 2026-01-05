@@ -64,6 +64,7 @@ MODE_NAMES: Final = {
 # Configuration
 CONF_DEVICE_ID: Final = "device_id"
 CONF_PROTOCOL_VERSION: Final = "protocol_version"
+CONF_REGISTRATION_KEY: Final = "registration_key"
 
 # Update interval
 UPDATE_INTERVAL: Final = 2  # seconds

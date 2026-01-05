@@ -389,18 +389,19 @@ class TestWaitForAck:
 
     @pytest.mark.asyncio
     async def test_wait_for_ack_with_error_code(self, client):
-        """Test ACK with non-zero error code (should log warning but not raise)."""
+        """Test ACK with non-zero error code (should raise ProtocolError)."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.exceptions import ProtocolError
+
         frame = Frame(frame_type=0x22, seq=0x0C, payload=b"\x01\x81\xD1\x00")
         ack_future = asyncio.Future()
 
         # ACK with error code 0x01 (first 4 bytes must match)
         ack_future.set_result(b"\x01\x81\xD1\x00\x01")
 
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.client._LOGGER") as mock_logger:
-            result = await client._wait_for_ack(frame, ack_future)
-            assert result == b"\x01\x81\xD1\x00\x01"
-            # Should log warning about error code
-            mock_logger.warning.assert_called()
+        with pytest.raises(ProtocolError) as exc_info:
+            await client._wait_for_ack(frame, ack_future)
+
+        assert exc_info.value.status_code == 1
 
     @pytest.mark.asyncio
     async def test_wait_for_ack_no_error_code(self, client):
@@ -412,6 +413,23 @@ class TestWaitForAck:
 
         result = await client._wait_for_ack(frame, ack_future)
         assert result == b"\x01\x81\xD1\x00\x00"
+
+    @pytest.mark.asyncio
+    async def test_wait_for_ack_with_various_error_codes(self, client):
+        """Test ACK with different error codes."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.exceptions import ProtocolError
+
+        test_cases = [0x01, 0x02, 0xFF]
+
+        for error_code in test_cases:
+            frame = Frame(frame_type=0x22, seq=0x0E, payload=b"\x01\x81\xD1\x00")
+            ack_future = asyncio.Future()
+            ack_future.set_result(b"\x01\x81\xD1\x00" + bytes([error_code]))
+
+            with pytest.raises(ProtocolError) as exc_info:
+                await client._wait_for_ack(frame, ack_future)
+
+            assert exc_info.value.status_code == error_code
 
 
 class TestNotificationHandling:

@@ -47,15 +47,15 @@ def mock_ble_device():
 
 
 @pytest.fixture
-def device_id():
-    """Device ID for testing."""
-    return "AA:BB:CC:DD:EE:FF"
+def registration_key():
+    """Registration key for testing."""
+    return bytes.fromhex("00112233445566778899AABBCCDDEEFF")
 
 
 @pytest.fixture
-def coordinator(mock_hass, mock_ble_device, device_id):
+def coordinator(mock_hass, mock_ble_device, registration_key):
     """Create a coordinator instance."""
-    return CosoriKettleCoordinator(mock_hass, mock_ble_device, device_id)
+    return CosoriKettleCoordinator(mock_hass, mock_ble_device, registration_key)
 
 
 @pytest.fixture
@@ -96,21 +96,20 @@ def sample_status_payload():
 class TestCoordinatorInitialization:
     """Test coordinator initialization."""
 
-    def test_init_creates_coordinator(self, coordinator, mock_ble_device, device_id):
+    def test_init_creates_coordinator(self, coordinator, mock_ble_device, registration_key):
         """Test coordinator initialization."""
         assert coordinator._ble_device == mock_ble_device
-        assert coordinator._device_id == device_id
         assert coordinator._protocol_version == PROTOCOL_VERSION_V1
-        assert coordinator._registration_key == bytes.fromhex(device_id.replace(":", ""))
+        assert coordinator._registration_key == registration_key
         assert coordinator._client is None
         assert coordinator._connected is False
         assert coordinator._tx_seq == 0
         assert len(coordinator._rx_buffer) == 0
         assert len(coordinator._pending_ack) == 0
 
-    def test_init_sets_coordinator_name(self, coordinator, device_id):
+    def test_init_sets_coordinator_name(self, coordinator, mock_ble_device):
         """Test that coordinator name is set correctly."""
-        expected_name = f"{DOMAIN}_{device_id}"
+        expected_name = f"{DOMAIN}_{mock_ble_device.address}"
         assert coordinator.name == expected_name
 
     def test_init_sets_update_interval(self, coordinator):
@@ -451,7 +450,9 @@ class TestCoordinatorSendFrame:
 
     @pytest.mark.asyncio
     async def test_send_frame_ack_with_error_code(self, coordinator, mock_bleak_client):
-        """Test send_frame ACK with error code."""
+        """Test send_frame ACK with error code raises ProtocolError."""
+        from custom_components.cosori_kettle_ble.cosori_kettle.exceptions import ProtocolError
+
         coordinator._client = mock_bleak_client
         frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=b"\x01\x81\xD1\x00")
 
@@ -462,10 +463,11 @@ class TestCoordinatorSendFrame:
 
         mock_bleak_client.write_gatt_char.side_effect = handle_write
 
-        result = await coordinator._send_frame(frame)
+        # Should raise ProtocolError with status code 1
+        with pytest.raises(ProtocolError) as exc_info:
+            await coordinator._send_frame(frame)
 
-        # Should still succeed but log warning
-        assert result == b"\x01\x81\xD1\x00\x01"
+        assert exc_info.value.status_code == 1
 
     @pytest.mark.asyncio
     async def test_send_frame_no_ack_for_ack_frame(self, coordinator, mock_bleak_client):

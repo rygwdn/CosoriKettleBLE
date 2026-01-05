@@ -10,13 +10,40 @@
       },
       "confirm": {
         "title": "Add Cosori Kettle",
-        "description": "Do you want to add the Cosori Kettle {name} ({address}) to Home Assistant?"
+        "description": "Do you want to add {name} ({address})?"
+      },
+      "pairing_mode": {
+        "title": "Setup Method",
+        "description": "Choose how to set up {name}.",
+        "data": {
+          "pairing_mode": "Setup method"
+        }
+      },
+      "pair_device": {
+        "title": "Pair New Device",
+        "description": "Put your kettle into pairing mode, then click Submit to pair. A new registration key will be generated automatically."
+      },
+      "enter_key": {
+        "title": "Enter Registration Key",
+        "description": "Enter the 32-character hexadecimal registration key for {name}.",
+        "data": {
+          "registration_key": "Registration Key"
+        }
       }
+    },
+    "error": {
+      "device_not_in_pairing_mode": "Device is not in pairing mode. Put the kettle in pairing mode and try again.",
+      "pairing_failed": "Failed to pair with device. Please try again.",
+      "invalid_key": "Registration key was rejected by device. Check the key and try again.",
+      "invalid_key_length": "Registration key must be exactly 32 hexadecimal characters.",
+      "invalid_key_format": "Invalid registration key format. Use only 0-9, A-F.",
+      "connection_failed": "Failed to connect. Ensure device is nearby and try again."
     },
     "abort": {
       "already_configured": "Device is already configured",
       "not_supported": "This device is not a Cosori Kettle",
-      "no_devices_found": "No Cosori Kettle devices found"
+      "no_devices_found": "No Cosori Kettle devices found",
+      "device_not_found": "Device is no longer available"
     }
   }
 }

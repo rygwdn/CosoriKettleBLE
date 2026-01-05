@@ -13,6 +13,7 @@ from bleak_retry_connector import establish_connection
 
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import ConfigEntryAuthFailed
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -24,6 +25,10 @@ from .const import (
     PROTOCOL_VERSION_V1,
     SERVICE_UUID,
     UPDATE_INTERVAL,
+)
+from .cosori_kettle.exceptions import (
+    InvalidRegistrationKeyError,
+    ProtocolError,
 )
 from .cosori_kettle.protocol import (
     ExtendedStatus,
@@ -50,19 +55,24 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self,
         hass: HomeAssistant,
         ble_device: BLEDevice,
-        device_id: str,
+        registration_key: bytes,
     ) -> None:
-        """Initialize the coordinator."""
+        """Initialize the coordinator.
+
+        Args:
+            hass: Home Assistant instance
+            ble_device: BLE device object
+            registration_key: 16-byte registration key for authentication
+        """
         super().__init__(
             hass,
             _LOGGER,
-            name=f"{DOMAIN}_{device_id}",
+            name=f"{DOMAIN}_{ble_device.address}",
             update_interval=timedelta(seconds=UPDATE_INTERVAL),
         )
         self._ble_device = ble_device
-        self._device_id = device_id
         self._protocol_version = PROTOCOL_VERSION_V1
-        self._registration_key = bytes.fromhex(device_id.replace(":", ""))
+        self._registration_key = registration_key
         self._client: BleakClient | None = None
         self._rx_buffer = bytearray()
         self._tx_seq = 0
@@ -120,6 +130,10 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._connected = True
             _LOGGER.info("Connected to %s", self._ble_device.address)
 
+        except ConfigEntryAuthFailed:
+            # Re-raise auth failures to trigger reconfiguration flow
+            await self._disconnect()
+            raise
         except (BleakError, asyncio.TimeoutError) as err:
             _LOGGER.error("Failed to connect: %s", err)
             await self._disconnect()
@@ -198,10 +212,20 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         })
 
     async def _send_hello(self) -> None:
-        """Send hello packet."""
-        frame = build_hello_frame(self._protocol_version, self._registration_key, self._tx_seq)
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._send_frame(frame)
+        """Send hello packet.
+
+        Raises:
+            ConfigEntryAuthFailed: If registration key is invalid
+        """
+        try:
+            frame = build_hello_frame(self._protocol_version, self._registration_key, self._tx_seq)
+            self._tx_seq = (self._tx_seq + 1) & 0xFF
+            await self._send_frame(frame)
+        except InvalidRegistrationKeyError as err:
+            _LOGGER.error("Invalid registration key: %s", err)
+            raise ConfigEntryAuthFailed(
+                "Registration key is invalid. Please reconfigure the integration."
+            ) from err
 
     async def _send_frame(self, frame: Frame) -> bytes | None:
         """Send a frame to the device.
@@ -255,9 +279,13 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
                     # Extract error code/status from payload[4] if available
                     if len(ack_payload) > 4:
-                        error_code = ack_payload[4]
-                        if error_code != 0:
-                            _LOGGER.warning("Device returned error code: %02x", error_code)
+                        status_code = ack_payload[4]
+                        if status_code != 0:
+                            _LOGGER.warning("Device returned error status: %02x", status_code)
+                            raise ProtocolError(
+                                f"Device returned error status {status_code:02x}",
+                                status_code=status_code,
+                            )
 
                     return ack_payload
 

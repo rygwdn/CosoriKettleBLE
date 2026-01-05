@@ -48,3 +48,4 @@ tests/test_state
 Network Trash Folder
 Temporary Items
 .apdisk
+.coverage
