@@ -43,6 +43,10 @@ def mock_coordinator():
         "mode": MODE_MY_TEMP,
         "my_temp": 180,
     }
+    coordinator.manufacturer = "Cosori"
+    coordinator.model_number = "Smart Kettle"
+    coordinator.hardware_version = None
+    coordinator.software_version = None
     coordinator.async_set_mode = AsyncMock()
     coordinator.async_request_refresh = AsyncMock()
     coordinator.async_stop_heating = AsyncMock()

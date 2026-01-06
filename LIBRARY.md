@@ -214,12 +214,22 @@ All temperatures are in Fahrenheit. The library handles:
 
 - ✅ BLE packet framing (6-byte header + payload)
 - ✅ Checksum calculation (V0 and V1 protocols)
+- ✅ **Automatic protocol version detection** from HW/SW version
+- ✅ BLE Device Information Service reading
 - ✅ Request/response with ACK handling
 - ✅ 20-byte BLE chunking for TX
 - ✅ Status parsing (compact and extended formats)
 - ✅ On-base detection (byte 14 of extended status)
 - ✅ Hold/keep-warm timer management
 - ✅ Temperature validation (40-230°F sensor range)
+
+### Protocol Version Detection
+
+The library automatically detects the protocol version by reading from the BLE Device Information Service:
+- Reads hardware revision (`0x2A27`) and software revision (`0x2A28`)
+- Parses version strings (e.g., HW: "1.0.00", SW: "R0007V0012")
+- Selects V0 for older firmware (< R0007V0012) or V1 for newer
+- Defaults to V1 if version info unavailable
 
 See [PROTOCOL.md](PROTOCOL.md) for complete protocol documentation.
 

@@ -874,3 +874,60 @@ def test_build_hello_frame_invalid_key_length():
     key_long = bytes.fromhex("aabbccddee00112233445566778899aabbccdd")
     with pytest.raises(ValueError, match="Registration key must be 16 bytes"):
         build_hello_frame(PROTOCOL_VERSION_V1, key_long)
+
+
+def test_detect_protocol_version_v1_hw():
+    """Test protocol detection with V1 hardware version."""
+    from custom_components.cosori_kettle_ble.cosori_kettle.protocol import detect_protocol_version
+    version = detect_protocol_version("1.0.00", None)
+    assert version == PROTOCOL_VERSION_V1
+
+
+def test_detect_protocol_version_v1_sw():
+    """Test protocol detection with V1 software version."""
+    from custom_components.cosori_kettle_ble.cosori_kettle.protocol import detect_protocol_version
+    version = detect_protocol_version(None, "R0007V0012")
+    assert version == PROTOCOL_VERSION_V1
+
+
+def test_detect_protocol_version_v1_sw_newer():
+    """Test protocol detection with newer software version."""
+    from custom_components.cosori_kettle_ble.cosori_kettle.protocol import detect_protocol_version
+    version = detect_protocol_version(None, "R0008V0001")
+    assert version == PROTOCOL_VERSION_V1
+
+
+def test_detect_protocol_version_v0_sw():
+    """Test protocol detection with V0 software version."""
+    from custom_components.cosori_kettle_ble.cosori_kettle.protocol import detect_protocol_version
+    version = detect_protocol_version(None, "R0007V0011")
+    assert version == PROTOCOL_VERSION_V0
+
+
+def test_detect_protocol_version_v0_sw_older():
+    """Test protocol detection with older software version."""
+    from custom_components.cosori_kettle_ble.cosori_kettle.protocol import detect_protocol_version
+    version = detect_protocol_version(None, "R0006V0001")
+    assert version == PROTOCOL_VERSION_V0
+
+
+def test_detect_protocol_version_default():
+    """Test protocol detection defaults to V1 when no version info."""
+    from custom_components.cosori_kettle_ble.cosori_kettle.protocol import detect_protocol_version
+    version = detect_protocol_version(None, None)
+    assert version == PROTOCOL_VERSION_V1
+
+
+def test_detect_protocol_version_invalid_format():
+    """Test protocol detection with invalid version format defaults to V1."""
+    from custom_components.cosori_kettle_ble.cosori_kettle.protocol import detect_protocol_version
+    version = detect_protocol_version("invalid", "invalid")
+    assert version == PROTOCOL_VERSION_V1
+
+
+def test_detect_protocol_version_hw_takes_precedence():
+    """Test that hardware version >= 1.0.00 results in V1 regardless of SW."""
+    from custom_components.cosori_kettle_ble.cosori_kettle.protocol import detect_protocol_version
+    # Even with old SW, HW 1.0.00 should give V1
+    version = detect_protocol_version("1.0.00", "R0006V0001")
+    assert version == PROTOCOL_VERSION_V1

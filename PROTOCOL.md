@@ -118,9 +118,20 @@ The v1 checksum is calculated by setting the checksum byte to 0x01, set `checksu
 
 ### Detecting Protocol Version
 
-The protocol version can be detected from the device's hardware and software version strings:
-- **V0**: Older firmware versions
-- **V1**: Hardware 1.0.00, Software R0007V0012 and newer
+The protocol version is automatically detected by reading the device's hardware and software version from the BLE Device Information Service:
+
+**Standard BLE Characteristics:**
+- Hardware Revision: `00002a27-0000-1000-8000-00805f9b34fb`
+- Software Revision: `00002a28-0000-1000-8000-00805f9b34fb`
+
+**Version Detection Logic:**
+- **V0**: Software version < R0007V0012 (older firmware)
+- **V1**: Hardware 1.0.00+ OR Software R0007V0012 and newer
+- **Default**: V1 (if version info unavailable)
+
+**Example Version Strings:**
+- Hardware: `1.0.00`
+- Software: `R0007V0012` (Release 7, Version 12)
 
 ### Command Headers
 
@@ -322,11 +333,18 @@ Both fields correlate with the heating state, but they serve different purposes.
 
 1. **Connect** to BLE device
 2. **Discover** service `0xFFF0` and characteristics `0xFFF1`, `0xFFF2`
-3. **Subscribe** to notifications on RX characteristic (`0xFFF1`)
-4. **Send poll** command to request initial status
-5. **Receive** extended status packet with current state
-6. **Monitor** notifications for status updates
-7. **Send commands** via TX characteristic (`0xFFF2`) as needed
+3. **Read device information** (optional but recommended):
+   - Hardware revision from `0x2A27`
+   - Software revision from `0x2A28`
+   - Model number from `0x2A24`
+   - Manufacturer from `0x2A29`
+4. **Detect protocol version** based on HW/SW versions
+5. **Subscribe** to notifications on RX characteristic (`0xFFF1`)
+6. **Send hello** command using detected protocol version
+7. **Send poll** command to request initial status
+8. **Receive** extended status packet with current state
+9. **Monitor** notifications for status updates
+10. **Send commands** via TX characteristic (`0xFFF2`) as needed
 
 ### Polling Strategy
 

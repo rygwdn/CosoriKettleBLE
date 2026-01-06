@@ -351,9 +351,12 @@ This component implements the Cosori kettle BLE protocol reverse-engineered from
 - **Service UUID**: `0000fff0-0000-1000-8000-00805f9b34fb`
 - **RX Characteristic**: `0000fff1-...` (notifications from kettle)
 - **TX Characteristic**: `0000fff2-...` (commands to kettle)
-- **Sequence**: Registration handshake → Continuous polling (1s) → Commands
+- **Protocol Version**: Automatically detected from device firmware (V0/V1)
+- **Sequence**: Read device info → Detect protocol version → Registration handshake → Continuous polling (1s) → Commands
 
-See the [protocol documentation](protocol.md) for details (if available).
+The component automatically reads the kettle's hardware and software version from the BLE Device Information Service to detect the correct protocol version (V0 for older firmware, V1 for newer).
+
+See the [protocol documentation](PROTOCOL.md) for complete details.
 
 ## Troubleshooting
 

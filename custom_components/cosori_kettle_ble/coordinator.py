@@ -18,7 +18,11 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 
 from .const import (
     ACK_HEADER_TYPE,
+    CHAR_HARDWARE_REVISION_UUID,
+    CHAR_MANUFACTURER_UUID,
+    CHAR_MODEL_NUMBER_UUID,
     CHAR_RX_UUID,
+    CHAR_SOFTWARE_REVISION_UUID,
     CHAR_TX_UUID,
     DOMAIN,
     MESSAGE_HEADER_TYPE,
@@ -40,6 +44,7 @@ from .cosori_kettle.protocol import (
     build_set_my_temp_frame,
     build_status_request_frame,
     build_stop_frame,
+    detect_protocol_version,
     split_into_packets,
     parse_extended_status,
     parse_frames,
@@ -79,9 +84,40 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._connected = False
         self._lock = asyncio.Lock()
 
+        # Device information
+        self._hw_version: str | None = None
+        self._sw_version: str | None = None
+        self._model_number: str | None = None
+        self._manufacturer: str | None = None
+
         # ACK handling
         self._pending_ack: dict[int, asyncio.Future[bytes]] = {}
         self._ack_timeout = 5.0  # seconds
+
+    @property
+    def hardware_version(self) -> str | None:
+        """Return the hardware version."""
+        return self._hw_version
+
+    @property
+    def software_version(self) -> str | None:
+        """Return the software version."""
+        return self._sw_version
+
+    @property
+    def model_number(self) -> str | None:
+        """Return the model number."""
+        return self._model_number
+
+    @property
+    def manufacturer(self) -> str | None:
+        """Return the manufacturer."""
+        return self._manufacturer
+
+    @property
+    def protocol_version(self) -> int:
+        """Return the detected protocol version."""
+        return self._protocol_version
 
     async def async_start(self) -> None:
         """Start the coordinator."""
@@ -124,11 +160,20 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Subscribe to notifications
             await self._client.start_notify(CHAR_RX_UUID, self._notification_handler)
 
+            # Read device information and detect protocol version
+            await self._read_device_info()
+
             # Send hello
             await self._send_hello()
 
             self._connected = True
-            _LOGGER.info("Connected to %s", self._ble_device.address)
+            _LOGGER.info(
+                "Connected to %s (HW: %s, SW: %s, Protocol: V%d)",
+                self._ble_device.address,
+                self._hw_version or "unknown",
+                self._sw_version or "unknown",
+                self._protocol_version,
+            )
 
         except ConfigEntryAuthFailed:
             # Re-raise auth failures to trigger reconfiguration flow
@@ -138,6 +183,54 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             _LOGGER.error("Failed to connect: %s", err)
             await self._disconnect()
             raise UpdateFailed(f"Failed to connect: {err}") from err
+
+    async def _read_device_info(self) -> None:
+        """Read device information from BLE Device Information Service.
+
+        Reads hardware version, software version, model number, and manufacturer
+        from standard BLE characteristics, then detects the appropriate protocol version.
+        """
+        if not self._client:
+            return
+
+        # Read device information characteristics (ignore errors if not available)
+        try:
+            hw_data = await self._client.read_gatt_char(CHAR_HARDWARE_REVISION_UUID)
+            self._hw_version = hw_data.decode("utf-8").strip()
+            _LOGGER.debug("Hardware version: %s", self._hw_version)
+        except Exception as err:
+            _LOGGER.debug("Could not read hardware version: %s", err)
+
+        try:
+            sw_data = await self._client.read_gatt_char(CHAR_SOFTWARE_REVISION_UUID)
+            self._sw_version = sw_data.decode("utf-8").strip()
+            _LOGGER.debug("Software version: %s", self._sw_version)
+        except Exception as err:
+            _LOGGER.debug("Could not read software version: %s", err)
+
+        try:
+            model_data = await self._client.read_gatt_char(CHAR_MODEL_NUMBER_UUID)
+            self._model_number = model_data.decode("utf-8").strip()
+            _LOGGER.debug("Model number: %s", self._model_number)
+        except Exception as err:
+            _LOGGER.debug("Could not read model number: %s", err)
+
+        try:
+            mfr_data = await self._client.read_gatt_char(CHAR_MANUFACTURER_UUID)
+            self._manufacturer = mfr_data.decode("utf-8").strip()
+            _LOGGER.debug("Manufacturer: %s", self._manufacturer)
+        except Exception as err:
+            _LOGGER.debug("Could not read manufacturer: %s", err)
+
+        # Detect protocol version based on HW/SW versions
+        detected_version = detect_protocol_version(self._hw_version, self._sw_version)
+        self._protocol_version = detected_version
+        _LOGGER.info(
+            "Detected protocol version V%d (HW: %s, SW: %s)",
+            detected_version,
+            self._hw_version or "unknown",
+            self._sw_version or "unknown",
+        )
 
     def _on_disconnect(self, client: BleakClient) -> None:
         """Handle disconnection."""

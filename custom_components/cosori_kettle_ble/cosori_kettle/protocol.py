@@ -375,3 +375,58 @@ def parse_extended_status(payload: bytes) -> ExtendedStatus:
         baby_formula_enabled=payload[26] == 0x01,
         valid=True,
     )
+
+
+def detect_protocol_version(hw_version: str | None, sw_version: str | None) -> int:
+    """Detect protocol version from hardware and software version strings.
+
+    Args:
+        hw_version: Hardware version string (e.g., "1.0.00")
+        sw_version: Software version string (e.g., "R0007V0012")
+
+    Returns:
+        Protocol version (PROTOCOL_VERSION_V0 or PROTOCOL_VERSION_V1)
+
+    Notes:
+        - V1 protocol: Hardware 1.0.00, Software R0007V0012 and newer
+        - V0 protocol: Older firmware versions
+        - Defaults to V1 if version info is unavailable
+    """
+    # Default to V1 if no version info available
+    if not hw_version and not sw_version:
+        return PROTOCOL_VERSION_V1
+
+    # Check hardware version
+    if hw_version:
+        # Parse hardware version (expected format: "1.0.00")
+        try:
+            parts = hw_version.split(".")
+            if len(parts) >= 1:
+                major = int(parts[0])
+                # Hardware 1.x.x and above use V1 protocol
+                if major >= 1:
+                    return PROTOCOL_VERSION_V1
+        except (ValueError, AttributeError):
+            pass
+
+    # Check software version
+    if sw_version:
+        # Parse software version (expected format: "R0007V0012")
+        try:
+            if sw_version.startswith("R") and "V" in sw_version:
+                # Extract release and version numbers
+                r_part = sw_version[1:sw_version.index("V")]
+                v_part = sw_version[sw_version.index("V")+1:]
+                release = int(r_part)
+                version = int(v_part)
+
+                # R0007V0012 and newer use V1 protocol
+                if release > 7 or (release == 7 and version >= 12):
+                    return PROTOCOL_VERSION_V1
+                else:
+                    return PROTOCOL_VERSION_V0
+        except (ValueError, AttributeError):
+            pass
+
+    # Default to V1 for unknown formats
+    return PROTOCOL_VERSION_V1

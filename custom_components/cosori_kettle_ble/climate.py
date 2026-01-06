@@ -87,8 +87,10 @@ class CosoriKettleClimate(CoordinatorEntity[CosoriKettleCoordinator], ClimateEnt
         self._attr_device_info = {
             "identifiers": {(DOMAIN, entry.entry_id)},
             "name": "Cosori Kettle",
-            "manufacturer": "Cosori",
-            "model": "Smart Kettle",
+            "manufacturer": coordinator.manufacturer or "Cosori",
+            "model": coordinator.model_number or "Smart Kettle",
+            "hw_version": coordinator.hardware_version,
+            "sw_version": coordinator.software_version,
         }
         self._preset_mode = None
 

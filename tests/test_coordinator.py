@@ -67,6 +67,9 @@ def mock_bleak_client():
     client.stop_notify = AsyncMock()
     client.disconnect = AsyncMock()
     client.write_gatt_char = AsyncMock()
+    # Configure read_gatt_char to raise exception by default
+    # Tests can override this if they need specific behavior
+    client.read_gatt_char = AsyncMock(side_effect=Exception("Device info not available"))
     return client
 
 
@@ -506,11 +509,11 @@ class TestCoordinatorCommandMethods:
         coordinator._client = mock_bleak_client
         coordinator._connected = True
 
-        async def handle_write(*args, **kwargs):
-            # Simulate ACK
+        def handle_write(*args, **kwargs):
+            # Simulate ACK (only set once, in case of multiple write calls)
             seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq:
-                coordinator._pending_ack[seq].set_result(b"\x01\xf0\x00\x00\x00")
+            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
+                coordinator._pending_ack[seq].set_result(b"\x01\xf0\xa3\x00\x00")
 
         mock_bleak_client.write_gatt_char.side_effect = handle_write
 
@@ -525,13 +528,12 @@ class TestCoordinatorCommandMethods:
 
         call_count = 0
 
-        async def slow_write(*args, **kwargs):
+        def slow_write(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            await asyncio.sleep(0.1)
             seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq:
-                coordinator._pending_ack[seq].set_result(b"\x01\xf0\x00\x00\x00")
+            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
+                coordinator._pending_ack[seq].set_result(b"\x01\xf0\xa3\x00\x00")
 
         mock_bleak_client.write_gatt_char.side_effect = slow_write
 
@@ -548,10 +550,10 @@ class TestCoordinatorCommandMethods:
         """Test async_set_my_temp."""
         coordinator._client = mock_bleak_client
 
-        async def handle_write(*args, **kwargs):
+        def handle_write(*args, **kwargs):
             seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq:
-                coordinator._pending_ack[seq].set_result(b"\x01\xf3\x00\x00\x00")
+            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
+                coordinator._pending_ack[seq].set_result(b"\x01\xf3\xa3\x00\x00")
 
         mock_bleak_client.write_gatt_char.side_effect = handle_write
 
@@ -564,10 +566,10 @@ class TestCoordinatorCommandMethods:
         """Test async_set_baby_formula."""
         coordinator._client = mock_bleak_client
 
-        async def handle_write(*args, **kwargs):
+        def handle_write(*args, **kwargs):
             seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq:
-                coordinator._pending_ack[seq].set_result(b"\x01\xf5\x00\x00\x00")
+            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
+                coordinator._pending_ack[seq].set_result(b"\x01\xf5\xa3\x00\x00")
 
         mock_bleak_client.write_gatt_char.side_effect = handle_write
 
@@ -580,10 +582,10 @@ class TestCoordinatorCommandMethods:
         """Test async_stop_heating."""
         coordinator._client = mock_bleak_client
 
-        async def handle_write(*args, **kwargs):
+        def handle_write(*args, **kwargs):
             seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq:
-                coordinator._pending_ack[seq].set_result(b"\x01\xf4\x00\x00\x00")
+            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
+                coordinator._pending_ack[seq].set_result(b"\x01\xf4\xa3\x00\x00")
 
         mock_bleak_client.write_gatt_char.side_effect = handle_write
 
@@ -756,7 +758,8 @@ class TestCoordinatorSendHello:
         async def handle_write(*args, **kwargs):
             if coordinator._pending_ack:
                 seq = list(coordinator._pending_ack.keys())[0]
-                coordinator._pending_ack[seq].set_result(b"\x01\x81\xD1\x00\x00")
+                if not coordinator._pending_ack[seq].done():
+                    coordinator._pending_ack[seq].set_result(b"\x01\x81\xD1\x00\x00")
 
         mock_bleak_client.write_gatt_char.side_effect = handle_write
 
@@ -781,7 +784,8 @@ class TestCoordinatorIntegration:
                 # Simulate ACK
                 if coordinator._pending_ack:
                     seq = list(coordinator._pending_ack.keys())[0]
-                    coordinator._pending_ack[seq].set_result(b"\x01\x81\xD1\x00\x00")
+                    if not coordinator._pending_ack[seq].done():
+                        coordinator._pending_ack[seq].set_result(b"\x01\x81\xD1\x00\x00")
 
             mock_bleak_client.write_gatt_char.side_effect = handle_write
 
@@ -806,10 +810,20 @@ class TestCoordinatorIntegration:
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
             mock_establish.return_value = mock_bleak_client
 
+            # Track which command: first hello, then poll
+            command_acks = [
+                b"\x01\x81\xd1\x00\x00",  # hello
+                b"\x01\x40\x40\x00\x00",  # poll
+            ]
+            ack_index = 0
+
             async def handle_write(*args, **kwargs):
+                nonlocal ack_index
                 if coordinator._pending_ack:
                     seq = list(coordinator._pending_ack.keys())[0]
-                    coordinator._pending_ack[seq].set_result(b"\x01\x81\xD1\x00\x00")
+                    if not coordinator._pending_ack[seq].done():
+                        coordinator._pending_ack[seq].set_result(command_acks[ack_index])
+                        ack_index += 1
 
             mock_bleak_client.write_gatt_char.side_effect = handle_write
 
@@ -828,10 +842,22 @@ class TestCoordinatorIntegration:
         """Test sending multiple commands in sequence."""
         coordinator._client = mock_bleak_client
 
+        # Track which command we're on
+        command_acks = [
+            b"\x01\xf0\xa3\x00\x00",  # set_mode
+            b"\x01\xf3\xa3\x00\x00",  # set_my_temp
+            b"\x01\xf5\xa3\x00\x00",  # set_baby_formula
+            b"\x01\xf4\xa3\x00\x00",  # stop_heating
+        ]
+        ack_index = 0
+
         async def handle_write(*args, **kwargs):
+            nonlocal ack_index
             if coordinator._pending_ack:
                 seq = list(coordinator._pending_ack.keys())[0]
-                coordinator._pending_ack[seq].set_result(b"\x01\x81\xD1\x00\x00")
+                if not coordinator._pending_ack[seq].done():
+                    coordinator._pending_ack[seq].set_result(command_acks[ack_index])
+                    ack_index += 1
 
         mock_bleak_client.write_gatt_char.side_effect = handle_write
 

@@ -1,21 +1,27 @@
 """Pytest configuration for library tests."""
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
+import pytest
 
-# Mock homeassistant modules before importing custom_components
-sys.modules['homeassistant'] = MagicMock()
-sys.modules['homeassistant.components'] = MagicMock()
-sys.modules['homeassistant.components.bluetooth'] = MagicMock()
-sys.modules['homeassistant.config_entries'] = MagicMock()
-sys.modules['homeassistant.const'] = MagicMock()
-sys.modules['homeassistant.core'] = MagicMock()
-sys.modules['homeassistant.exceptions'] = MagicMock()
-sys.modules['homeassistant.helpers'] = MagicMock()
-sys.modules['homeassistant.helpers.update_coordinator'] = MagicMock()
-sys.modules['bleak_retry_connector'] = MagicMock()
-sys.modules['voluptuous'] = MagicMock()
+# Mock missing optional dependencies before any imports
+sys.modules['aiousbwatcher'] = MagicMock()
+sys.modules['serial'] = MagicMock()
+sys.modules['serial.tools'] = MagicMock()
+sys.modules['serial.tools.list_ports'] = MagicMock()
+sys.modules['serial.tools.list_ports_common'] = MagicMock()
 
 # Add project root to path so custom_components can be imported
 project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
+
+# pytest-homeassistant-custom-component provides proper fixtures and mocking
+# for homeassistant modules
+
+
+@pytest.fixture(autouse=True)
+def disable_frame_helper():
+    """Disable frame helper usage checks in tests."""
+    # Patch the frame.report_usage to do nothing
+    with patch('homeassistant.helpers.frame.report_usage'):
+        yield
