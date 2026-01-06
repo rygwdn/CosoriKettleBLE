@@ -9,14 +9,10 @@ __pycache__/
 dist/
 build/
 
-# ESPHome
-.esphome/
+# Build artifacts
 *.bin
 *.elf
 *.map
-/test_cpp
-tests/test_cpp
-tests/test_state
 *.o
 *.d
 

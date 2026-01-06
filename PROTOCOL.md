@@ -1,6 +1,6 @@
 # Cosori Smart Kettle BLE Protocol
 
-This document describes the custom Bluetooth Low Energy protocol used by the Cosori Smart Electric Kettle for communication between the kettle and control devices (smartphone apps, ESP32, etc.).
+This document describes the custom Bluetooth Low Energy protocol used by the Cosori Smart Electric Kettle for communication between the kettle and control devices (smartphone apps, etc.).
 
 ## Overview
 
@@ -445,7 +445,7 @@ RX: a5:12:26:1d:00:02:01:40:40:00:00:00:d4:5c:8c:00:00:00:00:00:00:00:00:3c:69:0
 
 ## Discoveries and Corrections
 
-During development of the ESPHome component, several incorrect assumptions were made and corrected:
+During development, several incorrect assumptions were made and corrected:
 
 ### Incorrect: Using Compact Packet for On-Base Detection
 
@@ -604,7 +604,7 @@ Areas not yet fully understood:
 
 ## References
 
-- **Implementation:** ESPHome custom component in `components/cosori_kettle_ble/`
+- **Implementation:** Home Assistant custom component in `custom_components/cosori_kettle_ble/`
 - **Test captures:** `offbase.json` and various log files
 - **Discussion:** Protocol analysis throughout development conversation
 
