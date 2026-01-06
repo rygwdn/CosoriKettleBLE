@@ -247,7 +247,7 @@ class CosoriKettleConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         # Scan for devices
         current_addresses = self._async_current_ids()
-        discovered = await bluetooth.async_discovered_service_info(self.hass)
+        discovered = bluetooth.async_discovered_service_info(self.hass)
 
         self._discovered_devices = {}
         for info in discovered:
