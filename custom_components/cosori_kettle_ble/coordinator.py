@@ -21,15 +21,12 @@ from .const import (
     CHAR_HARDWARE_REVISION_UUID,
     CHAR_MANUFACTURER_UUID,
     CHAR_MODEL_NUMBER_UUID,
-    CHAR_RX_UUID,
     CHAR_SOFTWARE_REVISION_UUID,
-    CHAR_TX_UUID,
     DOMAIN,
-    MESSAGE_HEADER_TYPE,
     PROTOCOL_VERSION_V1,
-    SERVICE_UUID,
     UPDATE_INTERVAL,
 )
+from .cosori_kettle.client import CosoriKettleBLEClient
 from .cosori_kettle.exceptions import (
     InvalidRegistrationKeyError,
     ProtocolError,
@@ -38,16 +35,13 @@ from .cosori_kettle.protocol import (
     ExtendedStatus,
     Frame,
     build_hello_frame,
-    build_packet,
     build_set_baby_formula_frame,
     build_set_mode_frame,
     build_set_my_temp_frame,
     build_status_request_frame,
     build_stop_frame,
     detect_protocol_version,
-    split_into_packets,
     parse_extended_status,
-    parse_frames,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -78,10 +72,7 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._ble_device = ble_device
         self._protocol_version = PROTOCOL_VERSION_V1
         self._registration_key = registration_key
-        self._client: BleakClient | None = None
-        self._rx_buffer = bytearray()
         self._tx_seq = 0
-        self._connected = False
         self._lock = asyncio.Lock()
 
         # Device information
@@ -90,9 +81,10 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._model_number: str | None = None
         self._manufacturer: str | None = None
 
-        # ACK handling
-        self._pending_ack: dict[int, asyncio.Future[bytes]] = {}
-        self._ack_timeout = 5.0  # seconds
+        # BLE client (will be initialized in async_start)
+        self._client: CosoriKettleBLEClient | None = None
+        # TODO: remove..
+        self._bleak_client: BleakClient | None = None
 
     @property
     def hardware_version(self) -> str | None:
@@ -135,7 +127,7 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _connect(self) -> None:
         """Connect to the device."""
-        if self._connected:
+        if self._client and self._client.is_connected:
             return
 
         _LOGGER.debug("Connecting to %s", self._ble_device.address)
@@ -149,24 +141,33 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             if ble_device is None:
                 raise UpdateFailed("Device not found")
 
-            # Use retry connector for robust connection
-            self._client = await establish_connection(
+            # Use retry connector for robust connection to establish initial connection
+            self._bleak_client = await establish_connection(
                 BleakClient,
                 ble_device,
                 self._ble_device.address,
-                disconnected_callback=self._on_disconnect,
             )
 
-            # Subscribe to notifications
-            await self._client.start_notify(CHAR_RX_UUID, self._notification_handler)
-
             # Read device information and detect protocol version
+            # TODO: move the read device info logic into the cosori client
             await self._read_device_info()
+
+            # Disconnect bleak client after reading device info
+            if self._bleak_client and self._bleak_client.is_connected:
+                await self._bleak_client.disconnect()
+            self._bleak_client = None
+
+            # Create our BLE client wrapper
+            self._client = CosoriKettleBLEClient(
+                ble_device,
+                notification_callback=self._frame_handler,
+                disconnected_callback=self._on_disconnect,
+            )
+            await self._client.connect()
 
             # Send hello
             await self._send_hello()
 
-            self._connected = True
             _LOGGER.info(
                 "Connected to %s (HW: %s, SW: %s, Protocol: V%d)",
                 self._ble_device.address,
@@ -190,33 +191,33 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         Reads hardware version, software version, model number, and manufacturer
         from standard BLE characteristics, then detects the appropriate protocol version.
         """
-        if not self._client:
+        if not self._bleak_client:
             return
 
         # Read device information characteristics (ignore errors if not available)
         try:
-            hw_data = await self._client.read_gatt_char(CHAR_HARDWARE_REVISION_UUID)
+            hw_data = await self._bleak_client.read_gatt_char(CHAR_HARDWARE_REVISION_UUID)
             self._hw_version = hw_data.decode("utf-8").strip()
             _LOGGER.debug("Hardware version: %s", self._hw_version)
         except Exception as err:
             _LOGGER.debug("Could not read hardware version: %s", err)
 
         try:
-            sw_data = await self._client.read_gatt_char(CHAR_SOFTWARE_REVISION_UUID)
+            sw_data = await self._bleak_client.read_gatt_char(CHAR_SOFTWARE_REVISION_UUID)
             self._sw_version = sw_data.decode("utf-8").strip()
             _LOGGER.debug("Software version: %s", self._sw_version)
         except Exception as err:
             _LOGGER.debug("Could not read software version: %s", err)
 
         try:
-            model_data = await self._client.read_gatt_char(CHAR_MODEL_NUMBER_UUID)
+            model_data = await self._bleak_client.read_gatt_char(CHAR_MODEL_NUMBER_UUID)
             self._model_number = model_data.decode("utf-8").strip()
             _LOGGER.debug("Model number: %s", self._model_number)
         except Exception as err:
             _LOGGER.debug("Could not read model number: %s", err)
 
         try:
-            mfr_data = await self._client.read_gatt_char(CHAR_MANUFACTURER_UUID)
+            mfr_data = await self._bleak_client.read_gatt_char(CHAR_MANUFACTURER_UUID)
             self._manufacturer = mfr_data.decode("utf-8").strip()
             _LOGGER.debug("Manufacturer: %s", self._manufacturer)
         except Exception as err:
@@ -232,65 +233,47 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._sw_version or "unknown",
         )
 
-    def _on_disconnect(self, client: BleakClient) -> None:
+    def _on_disconnect(self) -> None:
         """Handle disconnection."""
         _LOGGER.warning("Disconnected from %s", self._ble_device.address)
-        self._connected = False
 
     async def _disconnect(self) -> None:
         """Disconnect from the device."""
-        if self._client and self._client.is_connected:
+        if self._client:
             try:
-                await self._client.stop_notify(CHAR_RX_UUID)
                 await self._client.disconnect()
             except BleakError as err:
                 _LOGGER.debug("Error during disconnect: %s", err)
-        self._client = None
-        self._connected = False
+            self._client = None
+        if self._bleak_client and self._bleak_client.is_connected:
+            try:
+                await self._bleak_client.disconnect()
+            except BleakError as err:
+                _LOGGER.debug("Error during disconnect: %s", err)
+            self._bleak_client = None
 
     @callback
-    def _notification_handler(self, sender: int, data: bytearray) -> None:
-        """Handle BLE notifications."""
-        _LOGGER.debug("Received notification: %s", data.hex())
-        self._rx_buffer.extend(data)
+    def _frame_handler(self, frame: Frame) -> None:
+        """Handle received frames from BLE client.
 
-        # Parse all available frames
-        frames, bytes_consumed = parse_frames(self._rx_buffer)
+        Args:
+            frame: Received frame from device
+        """
+        _LOGGER.debug(
+            "Received frame: type=%02x seq=%02x payload=%s",
+            frame.frame_type,
+            frame.seq,
+            frame.payload.hex(),
+        )
 
-        for frame in frames:
-            _LOGGER.debug(
-                "Processed frame: type=%02x seq=%02x payload=%s",
-                frame.frame_type,
-                frame.seq,
-                frame.payload.hex(),
-            )
-
-            # Handle ACK frames
-            if frame.frame_type == ACK_HEADER_TYPE:
-                self._handle_ack(frame.seq, frame.payload)
-
-            # Parse status
-            status = parse_extended_status(frame.payload)
-            if status.valid:
-                self._update_data_from_status(status)
-
-        # Remove consumed bytes from buffer
-        if bytes_consumed > 0:
-            self._rx_buffer = self._rx_buffer[bytes_consumed:]
-
-    def _handle_ack(self, seq: int, payload: bytes) -> None:
-        """Handle ACK frame."""
-        _LOGGER.debug("ACK received: seq=%02x payload=%s", seq, payload.hex())
-
-        # Complete pending future if exists
-        if seq in self._pending_ack:
-            future = self._pending_ack.pop(seq)
-            if not future.done():
-                future.set_result(payload)
-                _LOGGER.debug("ACK future completed for seq=%02x", seq)
+        status = parse_extended_status(frame.payload)
+        # TODO: check command ID and parse both extended and compact status!
+        if status.valid:
+            self._update_data_from_status(status)
 
     def _update_data_from_status(self, status: ExtendedStatus) -> None:
         """Update coordinator data from status."""
+        # TODO: handle compact status too..
         self.async_set_updated_data({
             "stage": status.stage,
             "mode": status.mode,
@@ -311,6 +294,7 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ConfigEntryAuthFailed: If registration key is invalid
         """
         try:
+            # TODO: convert the build_x_frame functions into build_x_payload and have the client handle tx sequences and protocol version
             frame = build_hello_frame(self._protocol_version, self._registration_key, self._tx_seq)
             self._tx_seq = (self._tx_seq + 1) & 0xFF
             await self._send_frame(frame)
@@ -320,11 +304,12 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                 "Registration key is invalid. Please reconfigure the integration."
             ) from err
 
-    async def _send_frame(self, frame: Frame) -> bytes | None:
+    async def _send_frame(self, frame: Frame, wait_for_ack: bool = True) -> bytes | None:
         """Send a frame to the device.
 
         Args:
             frame: Frame to send
+            wait_for_ack: Whether to wait for ACK response
 
         Returns:
             ACK payload if waiting for ACK, None otherwise
@@ -335,86 +320,29 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         if not self._client or not self._client.is_connected:
             raise UpdateFailed("Not connected to device")
 
-        # Determine if we should wait for ACK (default yes unless frame type is ACK)
-        wait_for_ack = frame.frame_type != ACK_HEADER_TYPE
-
-        # Build packet
-        packet = build_packet(frame)
-
-        # Create future for ACK if needed
-        ack_future: asyncio.Future[bytes] | None = None
-        if wait_for_ack:
-            ack_future = asyncio.Future()
-            self._pending_ack[frame.seq] = ack_future
-
         try:
-            # Send packet in chunks
-            packets = split_into_packets(packet)
-            for pkt in packets:
-                _LOGGER.debug("Sending packet: %s", pkt.hex())
-                await self._client.write_gatt_char(CHAR_TX_UUID, pkt, response=True)
-
-            # Wait for and validate ACK if needed
-            if wait_for_ack and ack_future:
-                try:
-                    ack_payload = await asyncio.wait_for(
-                        ack_future, timeout=self._ack_timeout
-                    )
-
-                    # Verify first 4 bytes match (command ID)
-                    if len(frame.payload) >= 4 and len(ack_payload) >= 4:
-                        sent_cmd = frame.payload[:4]
-                        ack_cmd = ack_payload[:4]
-                        if sent_cmd != ack_cmd:
-                            raise UpdateFailed(
-                                f"ACK command mismatch: sent {sent_cmd.hex()}, got {ack_cmd.hex()}"
-                            )
-
-                    # Extract error code/status from payload[4] if available
-                    if len(ack_payload) > 4:
-                        status_code = ack_payload[4]
-                        if status_code != 0:
-                            _LOGGER.warning("Device returned error status: %02x", status_code)
-                            raise ProtocolError(
-                                f"Device returned error status {status_code:02x}",
-                                status_code=status_code,
-                            )
-
-                    return ack_payload
-
-                except asyncio.TimeoutError:
-                    _LOGGER.error("Timeout waiting for ACK (seq=%02x)", frame.seq)
-                    raise UpdateFailed(f"Timeout waiting for ACK (seq={frame.seq:02x})")
-
-        finally:
-            # Clean up pending ACK if not completed
-            if wait_for_ack and frame.seq in self._pending_ack:
-                self._pending_ack.pop(frame.seq, None)
-
-        return None
+            return await self._client.send_frame(frame, wait_for_ack=wait_for_ack)
+        except (asyncio.TimeoutError, ValueError, ProtocolError) as err:
+            raise UpdateFailed(f"Failed to send frame: {err}") from err
 
     async def _async_update_data(self) -> dict[str, Any]:
         """Poll the device for status."""
         async with self._lock:
             try:
                 # Ensure connection
-                if not self._connected:
+                if not self._client or not self._client.is_connected:
                     await self._connect()
 
-                # Request status
+                # Request status and wait for ACK
                 frame = build_status_request_frame(self._protocol_version, self._tx_seq)
                 self._tx_seq = (self._tx_seq + 1) & 0xFF
-                await self._send_frame(frame)
+                await self._send_frame(frame, wait_for_ack=True)
 
-                # Wait for response
-                await asyncio.sleep(0.5)
-
-                # Return current data
+                # Return current data (updated via notification handler)
                 return self.data or {}
 
             except (BleakError, asyncio.TimeoutError) as err:
                 _LOGGER.error("Failed to update: %s", err)
-                self._connected = False
                 raise UpdateFailed(f"Failed to update: {err}") from err
 
     async def async_set_mode(self, mode: int, temp_f: int, hold_time: int) -> None:

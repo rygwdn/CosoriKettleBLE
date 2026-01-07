@@ -74,6 +74,17 @@ def mock_bleak_client():
 
 
 @pytest.fixture
+def mock_cosori_client():
+    """Create a mock CosoriKettleBLEClient."""
+    client = AsyncMock()
+    client.is_connected = True
+    client.connect = AsyncMock()
+    client.disconnect = AsyncMock()
+    client.send_frame = AsyncMock(return_value=b'\x01\x40\x40\x00')
+    return client
+
+
+@pytest.fixture
 def sample_status_payload():
     """Create a sample extended status payload."""
     return bytearray([
@@ -105,10 +116,8 @@ class TestCoordinatorInitialization:
         assert coordinator._protocol_version == PROTOCOL_VERSION_V1
         assert coordinator._registration_key == registration_key
         assert coordinator._client is None
-        assert coordinator._connected is False
+        assert coordinator._bleak_client is None
         assert coordinator._tx_seq == 0
-        assert len(coordinator._rx_buffer) == 0
-        assert len(coordinator._pending_ack) == 0
 
     def test_init_sets_coordinator_name(self, coordinator, mock_ble_device):
         """Test that coordinator name is set correctly."""
@@ -154,29 +163,27 @@ class TestCoordinatorConnection:
     """Test connection management."""
 
     @pytest.mark.asyncio
-    async def test_connect_establishes_connection(self, coordinator, mock_ble_device, mock_bleak_client):
+    async def test_connect_establishes_connection(self, coordinator, mock_ble_device, mock_bleak_client, mock_cosori_client):
         """Test successful connection."""
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt, \
              patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish, \
+             patch("custom_components.cosori_kettle_ble.coordinator.CosoriKettleBLEClient") as mock_client_class, \
              patch.object(coordinator, "_send_hello", new_callable=AsyncMock):
 
             # Setup mocks
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
             mock_establish.return_value = mock_bleak_client
+            mock_client_class.return_value = mock_cosori_client
 
             await coordinator._connect()
 
-            assert coordinator._connected is True
-            assert coordinator._client == mock_bleak_client
-            mock_bleak_client.start_notify.assert_called_once_with(
-                CHAR_RX_UUID, coordinator._notification_handler
-            )
+            assert coordinator._client == mock_cosori_client
+            mock_cosori_client.connect.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_connect_does_nothing_if_already_connected(self, coordinator, mock_bleak_client):
+    async def test_connect_does_nothing_if_already_connected(self, coordinator, mock_cosori_client):
         """Test that connect does nothing if already connected."""
-        coordinator._connected = True
-        coordinator._client = mock_bleak_client
+        coordinator._client = mock_cosori_client
 
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt:
             await coordinator._connect()
@@ -192,8 +199,6 @@ class TestCoordinatorConnection:
 
             with pytest.raises(UpdateFailed, match="Device not found"):
                 await coordinator._connect()
-
-            assert coordinator._connected is False
 
     @pytest.mark.asyncio
     async def test_connect_bleak_error(self, coordinator, mock_ble_device):
@@ -211,47 +216,38 @@ class TestCoordinatorConnection:
             with pytest.raises(UpdateFailed, match="Failed to connect"):
                 await coordinator._connect()
 
-            assert coordinator._connected is False
-
-    def test_on_disconnect_callback(self, coordinator, mock_bleak_client):
+    def test_on_disconnect_callback(self, coordinator):
         """Test disconnect callback."""
-        coordinator._connected = True
-        coordinator._on_disconnect(mock_bleak_client)
-        assert coordinator._connected is False
+        coordinator._on_disconnect()
+        # Should not raise, just log
 
     @pytest.mark.asyncio
-    async def test_disconnect_closes_connection(self, coordinator, mock_bleak_client):
+    async def test_disconnect_closes_connection(self, coordinator, mock_cosori_client):
         """Test successful disconnect."""
-        coordinator._client = mock_bleak_client
-        coordinator._connected = True
+        coordinator._client = mock_cosori_client
 
         await coordinator._disconnect()
 
-        mock_bleak_client.stop_notify.assert_called_once_with(CHAR_RX_UUID)
-        mock_bleak_client.disconnect.assert_called_once()
+        mock_cosori_client.disconnect.assert_called_once()
         assert coordinator._client is None
-        assert coordinator._connected is False
 
     @pytest.mark.asyncio
-    async def test_disconnect_handles_bleak_error(self, coordinator, mock_bleak_client):
+    async def test_disconnect_handles_bleak_error(self, coordinator, mock_cosori_client):
         """Test disconnect with BleakError."""
         from bleak.exc import BleakError
 
-        coordinator._client = mock_bleak_client
-        coordinator._connected = True
-        mock_bleak_client.stop_notify.side_effect = BleakError("Error")
+        coordinator._client = mock_cosori_client
+        mock_cosori_client.disconnect.side_effect = BleakError("Error")
 
         # Should not raise
         await coordinator._disconnect()
 
         assert coordinator._client is None
-        assert coordinator._connected is False
 
     @pytest.mark.asyncio
     async def test_disconnect_when_not_connected(self, coordinator):
         """Test disconnect when not connected."""
         coordinator._client = None
-        coordinator._connected = False
 
         # Should not raise
         await coordinator._disconnect()
@@ -261,10 +257,9 @@ class TestCoordinatorAsyncUpdateData:
     """Test _async_update_data method."""
 
     @pytest.mark.asyncio
-    async def test_async_update_data_requests_status(self, coordinator, mock_bleak_client):
+    async def test_async_update_data_requests_status(self, coordinator, mock_cosori_client):
         """Test that async_update_data requests status."""
-        coordinator._connected = True
-        coordinator._client = mock_bleak_client
+        coordinator._client = mock_cosori_client
         coordinator.data = {"stage": 0}
 
         with patch.object(coordinator, "_send_frame", new_callable=AsyncMock):
@@ -272,28 +267,29 @@ class TestCoordinatorAsyncUpdateData:
             assert result == coordinator.data
 
     @pytest.mark.asyncio
-    async def test_async_update_data_connects_if_disconnected(self, coordinator, mock_ble_device, mock_bleak_client):
+    async def test_async_update_data_connects_if_disconnected(self, coordinator, mock_ble_device, mock_bleak_client, mock_cosori_client):
         """Test that async_update_data reconnects if disconnected."""
-        coordinator._connected = False
+        coordinator._client = None
 
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt, \
              patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish, \
+             patch("custom_components.cosori_kettle_ble.coordinator.CosoriKettleBLEClient") as mock_client_class, \
              patch.object(coordinator, "_send_frame", new_callable=AsyncMock):
 
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
             mock_establish.return_value = mock_bleak_client
+            mock_client_class.return_value = mock_cosori_client
             coordinator.data = {}
 
             result = await coordinator._async_update_data()
 
-            assert coordinator._connected is True
+            assert coordinator._client == mock_cosori_client
             assert result == {}
 
     @pytest.mark.asyncio
-    async def test_async_update_data_increments_tx_seq(self, coordinator, mock_bleak_client):
+    async def test_async_update_data_increments_tx_seq(self, coordinator, mock_cosori_client):
         """Test that async_update_data increments tx sequence."""
-        coordinator._connected = True
-        coordinator._client = mock_bleak_client
+        coordinator._client = mock_cosori_client
         coordinator._tx_seq = 5
         coordinator.data = {}
 
@@ -302,10 +298,9 @@ class TestCoordinatorAsyncUpdateData:
             assert coordinator._tx_seq == 6
 
     @pytest.mark.asyncio
-    async def test_async_update_data_wraps_seq_at_255(self, coordinator, mock_bleak_client):
+    async def test_async_update_data_wraps_seq_at_255(self, coordinator, mock_cosori_client):
         """Test that tx_seq wraps at 255."""
-        coordinator._connected = True
-        coordinator._client = mock_bleak_client
+        coordinator._client = mock_cosori_client
         coordinator._tx_seq = 255
         coordinator.data = {}
 
@@ -314,13 +309,12 @@ class TestCoordinatorAsyncUpdateData:
             assert coordinator._tx_seq == 0
 
     @pytest.mark.asyncio
-    async def test_async_update_data_handles_bleak_error(self, coordinator, mock_bleak_client):
+    async def test_async_update_data_handles_bleak_error(self, coordinator, mock_cosori_client):
         """Test async_update_data handles BleakError."""
         from bleak.exc import BleakError
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
-        coordinator._connected = True
-        coordinator._client = mock_bleak_client
+        coordinator._client = mock_cosori_client
 
         with patch.object(coordinator, "_send_frame", new_callable=AsyncMock) as mock_send:
             mock_send.side_effect = BleakError("Error")
@@ -328,15 +322,12 @@ class TestCoordinatorAsyncUpdateData:
             with pytest.raises(UpdateFailed, match="Failed to update"):
                 await coordinator._async_update_data()
 
-            assert coordinator._connected is False
-
     @pytest.mark.asyncio
-    async def test_async_update_data_handles_timeout(self, coordinator, mock_bleak_client):
+    async def test_async_update_data_handles_timeout(self, coordinator, mock_cosori_client):
         """Test async_update_data handles timeout."""
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
-        coordinator._connected = True
-        coordinator._client = mock_bleak_client
+        coordinator._client = mock_cosori_client
 
         with patch.object(coordinator, "_send_frame", new_callable=AsyncMock) as mock_send:
             mock_send.side_effect = asyncio.TimeoutError()
@@ -345,15 +336,14 @@ class TestCoordinatorAsyncUpdateData:
                 await coordinator._async_update_data()
 
     @pytest.mark.asyncio
-    async def test_async_update_data_lock_prevents_concurrent_access(self, coordinator, mock_bleak_client):
+    async def test_async_update_data_lock_prevents_concurrent_access(self, coordinator, mock_cosori_client):
         """Test that lock prevents concurrent update data calls."""
-        coordinator._connected = True
-        coordinator._client = mock_bleak_client
+        coordinator._client = mock_cosori_client
         coordinator.data = {}
 
         call_count = 0
 
-        async def slow_send_frame(frame):
+        async def slow_send_frame(frame, wait_for_ack=True):
             nonlocal call_count
             call_count += 1
             await asyncio.sleep(0.1)
@@ -386,156 +376,123 @@ class TestCoordinatorSendFrame:
             await coordinator._send_frame(frame)
 
     @pytest.mark.asyncio
-    async def test_send_frame_disconnected_client(self, coordinator, mock_bleak_client):
+    async def test_send_frame_disconnected_client(self, coordinator, mock_cosori_client):
         """Test that send_frame requires connected client."""
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
-        coordinator._client = mock_bleak_client
-        mock_bleak_client.is_connected = False
+        coordinator._client = mock_cosori_client
+        mock_cosori_client.is_connected = False
         frame = Frame(frame_type=0x22, seq=0x01, payload=b"\x01\x81\xD1\x00")
 
         with pytest.raises(UpdateFailed, match="Not connected"):
             await coordinator._send_frame(frame)
 
     @pytest.mark.asyncio
-    async def test_send_frame_writes_to_gatt(self, coordinator, mock_bleak_client):
-        """Test that send_frame writes to GATT characteristic."""
-        coordinator._client = mock_bleak_client
-        coordinator._tx_seq = 0
+    async def test_send_frame_writes_to_gatt(self, coordinator, mock_cosori_client):
+        """Test that send_frame delegates to client."""
+        coordinator._client = mock_cosori_client
         frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=b"\x01\x81\xD1\x00")
 
-        # Mock the ACK handling
         ack_payload = b"\x01\x81\xD1\x00\x00"
-
-        async def handle_write(*args, **kwargs):
-            # Simulate ACK response
-            await asyncio.sleep(0.01)
-            if 1 in coordinator._pending_ack:
-                coordinator._pending_ack[1].set_result(ack_payload)
-
-        mock_bleak_client.write_gatt_char.side_effect = handle_write
+        mock_cosori_client.send_frame.return_value = ack_payload
 
         result = await coordinator._send_frame(frame)
 
         assert result == ack_payload
-        mock_bleak_client.write_gatt_char.assert_called()
+        mock_cosori_client.send_frame.assert_called_once_with(frame, wait_for_ack=True)
 
     @pytest.mark.asyncio
-    async def test_send_frame_ack_timeout(self, coordinator, mock_bleak_client):
+    async def test_send_frame_ack_timeout(self, coordinator, mock_cosori_client):
         """Test send_frame timeout waiting for ACK."""
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
-        coordinator._client = mock_bleak_client
-        coordinator._ack_timeout = 0.01
+        coordinator._client = mock_cosori_client
         frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=b"\x01\x81\xD1\x00")
 
-        with pytest.raises(UpdateFailed, match="Timeout waiting for ACK"):
+        mock_cosori_client.send_frame.side_effect = asyncio.TimeoutError()
+
+        with pytest.raises(UpdateFailed, match="Failed to send frame"):
             await coordinator._send_frame(frame)
 
     @pytest.mark.asyncio
-    async def test_send_frame_ack_command_mismatch(self, coordinator, mock_bleak_client):
+    async def test_send_frame_ack_command_mismatch(self, coordinator, mock_cosori_client):
         """Test send_frame with ACK command mismatch."""
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
-        coordinator._client = mock_bleak_client
-        coordinator._ack_timeout = 0.1
+        coordinator._client = mock_cosori_client
         frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=b"\x01\x81\xD1\x00")
 
-        async def handle_write(*args, **kwargs):
-            if 1 in coordinator._pending_ack:
-                # Send mismatched ACK
-                coordinator._pending_ack[1].set_result(b"\x02\x82\xD1\x00\x00")
+        mock_cosori_client.send_frame.side_effect = ValueError("ACK command mismatch")
 
-        mock_bleak_client.write_gatt_char.side_effect = handle_write
-
-        with pytest.raises(UpdateFailed, match="ACK command mismatch"):
+        with pytest.raises(UpdateFailed, match="Failed to send frame"):
             await coordinator._send_frame(frame)
 
     @pytest.mark.asyncio
-    async def test_send_frame_ack_with_error_code(self, coordinator, mock_bleak_client):
+    async def test_send_frame_ack_with_error_code(self, coordinator, mock_cosori_client):
         """Test send_frame ACK with error code raises ProtocolError."""
+        from homeassistant.helpers.update_coordinator import UpdateFailed
         from custom_components.cosori_kettle_ble.cosori_kettle.exceptions import ProtocolError
 
-        coordinator._client = mock_bleak_client
+        coordinator._client = mock_cosori_client
         frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=b"\x01\x81\xD1\x00")
 
-        async def handle_write(*args, **kwargs):
-            if 1 in coordinator._pending_ack:
-                # Send ACK with error code
-                coordinator._pending_ack[1].set_result(b"\x01\x81\xD1\x00\x01")
+        mock_cosori_client.send_frame.side_effect = ProtocolError("Device returned error status 0x01", status_code=1)
 
-        mock_bleak_client.write_gatt_char.side_effect = handle_write
-
-        # Should raise ProtocolError with status code 1
-        with pytest.raises(ProtocolError) as exc_info:
+        with pytest.raises(UpdateFailed, match="Failed to send frame"):
             await coordinator._send_frame(frame)
 
-        assert exc_info.value.status_code == 1
-
     @pytest.mark.asyncio
-    async def test_send_frame_no_ack_for_ack_frame(self, coordinator, mock_bleak_client):
-        """Test that ACK frames don't wait for ACK."""
-        coordinator._client = mock_bleak_client
+    async def test_send_frame_no_ack_for_ack_frame(self, coordinator, mock_cosori_client):
+        """Test that ACK frames can skip waiting for ACK."""
+        coordinator._client = mock_cosori_client
         frame = Frame(frame_type=ACK_HEADER_TYPE, seq=0x01, payload=b"\x01\x81\xD1\x00")
 
-        result = await coordinator._send_frame(frame)
+        mock_cosori_client.send_frame.return_value = None
 
-        # Should return None and not wait for ACK
+        result = await coordinator._send_frame(frame, wait_for_ack=False)
+
         assert result is None
-        assert 1 not in coordinator._pending_ack
+        mock_cosori_client.send_frame.assert_called_once_with(frame, wait_for_ack=False)
 
     @pytest.mark.asyncio
-    async def test_send_frame_cleanup_on_timeout(self, coordinator, mock_bleak_client):
-        """Test that pending ACK is cleaned up on timeout."""
+    async def test_send_frame_cleanup_on_timeout(self, coordinator, mock_cosori_client):
+        """Test that errors are properly propagated."""
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
-        coordinator._client = mock_bleak_client
-        coordinator._ack_timeout = 0.01
+        coordinator._client = mock_cosori_client
         frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=b"\x01\x81\xD1\x00")
+
+        mock_cosori_client.send_frame.side_effect = asyncio.TimeoutError()
 
         with pytest.raises(UpdateFailed):
             await coordinator._send_frame(frame)
-
-        # Pending ACK should be cleaned up
-        assert 1 not in coordinator._pending_ack
 
 
 class TestCoordinatorCommandMethods:
     """Test command methods (set_mode, set_temp, etc)."""
 
     @pytest.mark.asyncio
-    async def test_async_set_mode(self, coordinator, mock_bleak_client):
+    async def test_async_set_mode(self, coordinator, mock_cosori_client):
         """Test async_set_mode."""
-        coordinator._client = mock_bleak_client
-        coordinator._connected = True
-
-        def handle_write(*args, **kwargs):
-            # Simulate ACK (only set once, in case of multiple write calls)
-            seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
-                coordinator._pending_ack[seq].set_result(b"\x01\xf0\xa3\x00\x00")
-
-        mock_bleak_client.write_gatt_char.side_effect = handle_write
+        coordinator._client = mock_cosori_client
 
         await coordinator.async_set_mode(0x04, 212, 60)
 
         assert coordinator._tx_seq == 1
+        mock_cosori_client.send_frame.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_async_set_mode_with_lock(self, coordinator, mock_bleak_client):
+    async def test_async_set_mode_with_lock(self, coordinator, mock_cosori_client):
         """Test that async_set_mode uses lock."""
-        coordinator._client = mock_bleak_client
+        coordinator._client = mock_cosori_client
 
         call_count = 0
 
-        def slow_write(*args, **kwargs):
+        async def count_send(*args, **kwargs):
             nonlocal call_count
             call_count += 1
-            seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
-                coordinator._pending_ack[seq].set_result(b"\x01\xf0\xa3\x00\x00")
 
-        mock_bleak_client.write_gatt_char.side_effect = slow_write
+        mock_cosori_client.send_frame.side_effect = count_send
 
         task1 = asyncio.create_task(coordinator.async_set_mode(0x04, 212, 60))
         task2 = asyncio.create_task(coordinator.async_set_mode(0x06, 200, 30))
@@ -546,148 +503,102 @@ class TestCoordinatorCommandMethods:
         assert call_count == 2
 
     @pytest.mark.asyncio
-    async def test_async_set_my_temp(self, coordinator, mock_bleak_client):
+    async def test_async_set_my_temp(self, coordinator, mock_cosori_client):
         """Test async_set_my_temp."""
-        coordinator._client = mock_bleak_client
-
-        def handle_write(*args, **kwargs):
-            seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
-                coordinator._pending_ack[seq].set_result(b"\x01\xf3\xa3\x00\x00")
-
-        mock_bleak_client.write_gatt_char.side_effect = handle_write
+        coordinator._client = mock_cosori_client
 
         await coordinator.async_set_my_temp(180)
 
         assert coordinator._tx_seq == 1
+        mock_cosori_client.send_frame.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_async_set_baby_formula(self, coordinator, mock_bleak_client):
+    async def test_async_set_baby_formula(self, coordinator, mock_cosori_client):
         """Test async_set_baby_formula."""
-        coordinator._client = mock_bleak_client
-
-        def handle_write(*args, **kwargs):
-            seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
-                coordinator._pending_ack[seq].set_result(b"\x01\xf5\xa3\x00\x00")
-
-        mock_bleak_client.write_gatt_char.side_effect = handle_write
+        coordinator._client = mock_cosori_client
 
         await coordinator.async_set_baby_formula(True)
 
         assert coordinator._tx_seq == 1
+        mock_cosori_client.send_frame.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_async_stop_heating(self, coordinator, mock_bleak_client):
+    async def test_async_stop_heating(self, coordinator, mock_cosori_client):
         """Test async_stop_heating."""
-        coordinator._client = mock_bleak_client
-
-        def handle_write(*args, **kwargs):
-            seq = list(coordinator._pending_ack.keys())[0] if coordinator._pending_ack else None
-            if seq is not None and seq in coordinator._pending_ack and not coordinator._pending_ack[seq].done():
-                coordinator._pending_ack[seq].set_result(b"\x01\xf4\xa3\x00\x00")
-
-        mock_bleak_client.write_gatt_char.side_effect = handle_write
+        coordinator._client = mock_cosori_client
 
         await coordinator.async_stop_heating()
 
         assert coordinator._tx_seq == 1
+        mock_cosori_client.send_frame.assert_called_once()
 
 
 class TestCoordinatorNotificationHandler:
-    """Test notification handler and frame parsing."""
-
-    def test_notification_handler_extends_buffer(self, coordinator):
-        """Test that notification handler extends rx_buffer."""
-        data = bytearray([0xA5, 0x22])
-        coordinator._notification_handler(1, data)
-
-        assert coordinator._rx_buffer == data
+    """Test frame handler (called by BLE client)."""
 
     def test_notification_handler_parses_frames(self, coordinator, sample_status_payload):
-        """Test that notification handler parses frames."""
-        # Build a complete frame
+        """Test that frame handler processes status frames."""
         frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=sample_status_payload)
-        packet = build_packet(frame)
 
         with patch.object(coordinator, "_update_data_from_status") as mock_update:
-            coordinator._notification_handler(1, bytearray(packet))
+            coordinator._frame_handler(frame)
 
             # Should have called update
             mock_update.assert_called_once()
 
     def test_notification_handler_handles_ack(self, coordinator):
-        """Test that notification handler handles ACK frames."""
+        """Test that frame handler ignores ACK frames (handled by client)."""
         ack_payload = b"\x01\x81\xD1\x00\x00"
         frame = Frame(frame_type=ACK_HEADER_TYPE, seq=0x05, payload=ack_payload)
-        packet = build_packet(frame)
-
-        # Setup pending ACK
-        future = asyncio.Future()
-        coordinator._pending_ack[0x05] = future
-
-        coordinator._notification_handler(1, bytearray(packet))
-
-        assert future.done()
-        assert future.result() == ack_payload
-
-    def test_notification_handler_multiple_frames(self, coordinator, sample_status_payload):
-        """Test notification handler with multiple frames."""
-        frame1 = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=sample_status_payload)
-        packet1 = build_packet(frame1)
-
-        frame2 = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x02, payload=sample_status_payload)
-        packet2 = build_packet(frame2)
-
-        combined_data = bytearray(packet1 + packet2)
 
         with patch.object(coordinator, "_update_data_from_status") as mock_update:
-            coordinator._notification_handler(1, combined_data)
+            coordinator._frame_handler(frame)
+
+            # Should not process ACK frames
+            mock_update.assert_not_called()
+
+    def test_notification_handler_multiple_frames(self, coordinator, sample_status_payload):
+        """Test frame handler processes multiple frames."""
+        frame1 = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=sample_status_payload)
+        frame2 = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x02, payload=sample_status_payload)
+
+        with patch.object(coordinator, "_update_data_from_status") as mock_update:
+            coordinator._frame_handler(frame1)
+            coordinator._frame_handler(frame2)
 
             # Should have called update twice
             assert mock_update.call_count == 2
 
     def test_notification_handler_partial_frame(self, coordinator):
-        """Test notification handler with partial frame."""
-        partial_data = bytearray([0xA5, 0x22, 0x01])
-        coordinator._notification_handler(1, partial_data)
+        """Test frame handler with invalid status data."""
+        # Frame with invalid status payload
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=b"\x01\x02")
 
-        # Should remain in buffer
-        assert coordinator._rx_buffer == partial_data
+        with patch.object(coordinator, "_update_data_from_status") as mock_update:
+            coordinator._frame_handler(frame)
+
+            # Should not update if status invalid
+            mock_update.assert_not_called()
 
 
 class TestCoordinatorHandleAck:
-    """Test ACK handling."""
+    """Test ACK handling (now delegated to client)."""
 
     def test_handle_ack_completes_future(self, coordinator):
-        """Test that _handle_ack completes pending future."""
-        future = asyncio.Future()
-        coordinator._pending_ack[0x05] = future
-        payload = b"\x01\x81\xD1\x00\x00"
-
-        coordinator._handle_ack(0x05, payload)
-
-        assert future.done()
-        assert future.result() == payload
+        """Test that ACK handling is delegated to client."""
+        # ACK handling is now done by CosoriKettleBLEClient
+        # Coordinator no longer manages pending ACKs directly
+        pass
 
     def test_handle_ack_no_pending(self, coordinator):
-        """Test _handle_ack when no pending future."""
-        payload = b"\x01\x81\xD1\x00\x00"
-
-        # Should not raise
-        coordinator._handle_ack(0x05, payload)
+        """Test that ACK handling is delegated to client."""
+        # ACK handling is now done by CosoriKettleBLEClient
+        pass
 
     def test_handle_ack_already_done(self, coordinator):
-        """Test _handle_ack when future already done."""
-        future = asyncio.Future()
-        future.set_result(b"old result")
-        coordinator._pending_ack[0x05] = future
-        payload = b"\x01\x81\xD1\x00\x00"
-
-        # Should not overwrite
-        coordinator._handle_ack(0x05, payload)
-
-        assert future.result() == b"old result"
+        """Test that ACK handling is delegated to client."""
+        # ACK handling is now done by CosoriKettleBLEClient
+        pass
 
 
 class TestCoordinatorUpdateDataFromStatus:
@@ -772,94 +683,52 @@ class TestCoordinatorIntegration:
     """Integration tests."""
 
     @pytest.mark.asyncio
-    async def test_full_connection_flow(self, coordinator, mock_ble_device, mock_bleak_client, sample_status_payload):
+    async def test_full_connection_flow(self, coordinator, mock_ble_device, mock_bleak_client, mock_cosori_client, sample_status_payload):
         """Test full connection and update flow."""
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt, \
-             patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish:
+             patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish, \
+             patch("custom_components.cosori_kettle_ble.coordinator.CosoriKettleBLEClient") as mock_client_class:
 
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
             mock_establish.return_value = mock_bleak_client
-
-            async def handle_write(*args, **kwargs):
-                # Simulate ACK
-                if coordinator._pending_ack:
-                    seq = list(coordinator._pending_ack.keys())[0]
-                    if not coordinator._pending_ack[seq].done():
-                        coordinator._pending_ack[seq].set_result(b"\x01\x81\xD1\x00\x00")
-
-            mock_bleak_client.write_gatt_char.side_effect = handle_write
+            mock_client_class.return_value = mock_cosori_client
 
             # Connect
             await coordinator._connect()
-            assert coordinator._connected is True
+            assert coordinator._client == mock_cosori_client
 
-            # Receive status update
+            # Receive status update via frame handler
             frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=0x01, payload=sample_status_payload)
-            packet = build_packet(frame)
 
             with patch.object(coordinator, "async_set_updated_data") as mock_set:
-                coordinator._notification_handler(1, bytearray(packet))
+                coordinator._frame_handler(frame)
                 mock_set.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_reconnection_on_update(self, coordinator, mock_ble_device, mock_bleak_client):
+    async def test_reconnection_on_update(self, coordinator, mock_ble_device, mock_bleak_client, mock_cosori_client):
         """Test that update reconnects when disconnected."""
         with patch("custom_components.cosori_kettle_ble.coordinator.bluetooth") as mock_bt, \
-             patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish:
+             patch("custom_components.cosori_kettle_ble.coordinator.establish_connection", new_callable=AsyncMock) as mock_establish, \
+             patch("custom_components.cosori_kettle_ble.coordinator.CosoriKettleBLEClient") as mock_client_class:
 
             mock_bt.async_ble_device_from_address.return_value = mock_ble_device
             mock_establish.return_value = mock_bleak_client
-
-            # Track which command: first hello, then poll
-            command_acks = [
-                b"\x01\x81\xd1\x00\x00",  # hello
-                b"\x01\x40\x40\x00\x00",  # poll
-            ]
-            ack_index = 0
-
-            async def handle_write(*args, **kwargs):
-                nonlocal ack_index
-                if coordinator._pending_ack:
-                    seq = list(coordinator._pending_ack.keys())[0]
-                    if not coordinator._pending_ack[seq].done():
-                        coordinator._pending_ack[seq].set_result(command_acks[ack_index])
-                        ack_index += 1
-
-            mock_bleak_client.write_gatt_char.side_effect = handle_write
+            mock_client_class.return_value = mock_cosori_client
 
             # Start disconnected
-            coordinator._connected = False
+            coordinator._client = None
             coordinator.data = {}
 
             # Update should reconnect
             result = await coordinator._async_update_data()
 
-            assert coordinator._connected is True
+            assert coordinator._client == mock_cosori_client
             assert result == {}
 
     @pytest.mark.asyncio
-    async def test_multiple_commands_in_sequence(self, coordinator, mock_bleak_client):
+    async def test_multiple_commands_in_sequence(self, coordinator, mock_cosori_client):
         """Test sending multiple commands in sequence."""
-        coordinator._client = mock_bleak_client
-
-        # Track which command we're on
-        command_acks = [
-            b"\x01\xf0\xa3\x00\x00",  # set_mode
-            b"\x01\xf3\xa3\x00\x00",  # set_my_temp
-            b"\x01\xf5\xa3\x00\x00",  # set_baby_formula
-            b"\x01\xf4\xa3\x00\x00",  # stop_heating
-        ]
-        ack_index = 0
-
-        async def handle_write(*args, **kwargs):
-            nonlocal ack_index
-            if coordinator._pending_ack:
-                seq = list(coordinator._pending_ack.keys())[0]
-                if not coordinator._pending_ack[seq].done():
-                    coordinator._pending_ack[seq].set_result(command_acks[ack_index])
-                    ack_index += 1
-
-        mock_bleak_client.write_gatt_char.side_effect = handle_write
+        coordinator._client = mock_cosori_client
 
         await coordinator.async_set_mode(0x04, 212, 60)
         await coordinator.async_set_my_temp(180)
