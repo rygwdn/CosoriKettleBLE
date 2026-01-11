@@ -16,8 +16,23 @@ from bleak.exc import BleakError
 from .exceptions import ProtocolError
 from .protocol import (
     ACK_HEADER_TYPE,
+    CMD_CTRL,
+    CMD_HELLO,
+    CMD_POLL,
+    CMD_REGISTER,
+    CMD_SET_BABY_FORMULA,
+    CMD_SET_HOLD_TIME,
+    CMD_SET_MODE,
+    CMD_SET_MY_TEMP,
+    CMD_STOP,
+    CMD_TYPE_40,
+    CMD_TYPE_A3,
+    CMD_TYPE_D1,
     COMMANDS_WITH_STATUS,
     Frame,
+    MAX_TEMP_F,
+    MESSAGE_HEADER_TYPE,
+    MIN_TEMP_F,
     build_packet,
     parse_frames,
     split_into_packets,
@@ -54,6 +69,8 @@ class CosoriKettleBLEClient:
     def __init__(
         self,
         ble_device: BLEDevice,
+        registration_key: bytes | None = None,
+        protocol_version: int = 1,
         notification_callback: Callable[[Frame], None] | None = None,
         disconnected_callback: Callable[[], None] | None = None,
     ):
@@ -61,10 +78,15 @@ class CosoriKettleBLEClient:
 
         Args:
             ble_device: BLE device to connect to
+            registration_key: 16-byte registration key for authentication
+            protocol_version: Protocol version to use (default: 1)
             notification_callback: Callback for received frames
             disconnected_callback: Callback for disconnection events
         """
         self._ble_device = ble_device
+        self._registration_key = registration_key
+        self._protocol_version = protocol_version
+        self._tx_seq = 0
         self._notification_callback = notification_callback
         self._disconnected_callback = disconnected_callback
         self._client: BleakClient | None = None
@@ -85,6 +107,15 @@ class CosoriKettleBLEClient:
     def address(self) -> str:
         """Return the device address."""
         return self._ble_device.address
+
+    @property
+    def protocol_version(self) -> int:
+        """Return the protocol version."""
+        return self._protocol_version
+
+    def set_protocol_version(self, version: int) -> None:
+        """Set the protocol version (e.g., after auto-detection)."""
+        self._protocol_version = version
 
     async def connect(self) -> None:
         """Connect to the device."""
@@ -350,3 +381,222 @@ class CosoriKettleBLEClient:
                     self._pending_ack.pop(frame.seq, None)
 
         return None
+
+    async def send_register(self, wait_for_ack: bool = True) -> bytes | None:
+        """Send register packet for initial pairing.
+
+        Uses the stored registration_key.
+
+        Args:
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            ValueError: If registration key is not exactly 16 bytes
+            RuntimeError: If not connected
+        """
+        if self._registration_key is None or len(self._registration_key) != 16:
+            raise ValueError("Registration key must be exactly 16 bytes")
+
+        # Build payload with hex ASCII encoded registration key
+        payload = bytearray(36)
+        payload[0] = self._protocol_version
+        payload[1] = CMD_REGISTER
+        payload[2] = CMD_TYPE_D1
+        payload[3] = 0x00
+        hex_key = self._registration_key.hex()
+        payload[4:] = hex_key.encode("ascii")
+
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=bytes(payload))
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result
+
+    async def send_hello(self, wait_for_ack: bool = True) -> bytes | None:
+        """Send hello packet for reconnection.
+
+        Uses the stored registration_key.
+
+        Args:
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            ValueError: If registration key is not exactly 16 bytes
+            RuntimeError: If not connected
+        """
+        if self._registration_key is None or len(self._registration_key) != 16:
+            raise ValueError("Registration key must be exactly 16 bytes")
+
+        # Build payload with hex ASCII encoded registration key
+        payload = bytearray(36)
+        payload[0] = self._protocol_version
+        payload[1] = CMD_HELLO
+        payload[2] = CMD_TYPE_D1
+        payload[3] = 0x00
+        hex_key = self._registration_key.hex()
+        payload[4:] = hex_key.encode("ascii")
+
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=bytes(payload))
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result
+
+    async def send_status_request(self, wait_for_ack: bool = True) -> bytes | None:
+        """Send status request (POLL) packet.
+
+        Args:
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        payload = bytes([self._protocol_version, CMD_POLL, CMD_TYPE_40, 0x00])
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=payload)
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result
+
+    async def send_compact_status_request(self, wait_for_ack: bool = True) -> bytes | None:
+        """Send compact status request (CTRL) packet.
+
+        Args:
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        payload = bytes([self._protocol_version, CMD_CTRL, CMD_TYPE_40, 0x00])
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=payload)
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result
+
+    async def send_set_my_temp(self, temp_f: int, wait_for_ack: bool = True) -> bytes | None:
+        """Send set my temp packet.
+
+        Args:
+            temp_f: Target temperature in Fahrenheit (will be clamped to 104-212°F)
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        # Clamp to valid range
+        temp_f = max(MIN_TEMP_F, min(MAX_TEMP_F, temp_f))
+        payload = bytes([self._protocol_version, CMD_SET_MY_TEMP, CMD_TYPE_A3, 0x00, temp_f])
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=payload)
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result
+
+    async def send_set_baby_formula(self, enabled: bool, wait_for_ack: bool = True) -> bytes | None:
+        """Send set baby formula packet.
+
+        Args:
+            enabled: Whether to enable baby formula mode
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        payload = bytes([self._protocol_version, CMD_SET_BABY_FORMULA, CMD_TYPE_A3, 0x00, 0x01 if enabled else 0x00])
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=payload)
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result
+
+    async def send_set_hold_time(self, seconds: int, wait_for_ack: bool = True) -> bytes | None:
+        """Send set hold time packet.
+
+        Args:
+            seconds: Hold time in seconds
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        payload = bytes([
+            self._protocol_version,
+            CMD_SET_HOLD_TIME,
+            CMD_TYPE_A3,
+            0x00,
+            0x00,
+            0x01 if seconds > 0 else 0x00,
+            seconds & 0xFF,
+            (seconds >> 8) & 0xFF,
+        ])
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=payload)
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result
+
+    async def send_set_mode(
+        self, mode: int, temp_f: int, hold_time_seconds: int, wait_for_ack: bool = True
+    ) -> bytes | None:
+        """Send set mode packet.
+
+        Args:
+            mode: Heating mode (MODE_BOIL, MODE_HEAT, MODE_GREEN_TEA, etc.)
+            temp_f: Target temperature in Fahrenheit
+            hold_time_seconds: Duration to hold temperature (seconds)
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        payload = bytes([
+            self._protocol_version,
+            CMD_SET_MODE,
+            CMD_TYPE_A3,
+            0x00,
+            mode,
+            temp_f,
+            0x01 if hold_time_seconds > 0 else 0x00,
+            (hold_time_seconds >> 8) & 0xFF,
+            hold_time_seconds & 0xFF,
+        ])
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=payload)
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result
+
+    async def send_stop(self, wait_for_ack: bool = True) -> bytes | None:
+        """Send stop heating packet.
+
+        Args:
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        payload = bytes([self._protocol_version, CMD_STOP, CMD_TYPE_A3, 0x00])
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=payload)
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result

@@ -17,7 +17,6 @@ Basic usage:
 Advanced usage:
     >>> from cosori_kettle import CosoriKettle, CosoriKettleBLEClient
     >>> from cosori_kettle.protocol import (
-    >>>     build_status_request_frame,
     >>>     parse_extended_status,
     >>>     PROTOCOL_VERSION_V1,
     >>> )
@@ -40,13 +39,7 @@ from .protocol import (
     MODE_OOLONG,
     PROTOCOL_VERSION_V0,
     PROTOCOL_VERSION_V1,
-    build_hello_frame,
     build_packet,
-    build_set_baby_formula_frame,
-    build_set_mode_frame,
-    build_set_my_temp_frame,
-    build_status_request_frame,
-    build_stop_frame,
     parse_extended_status,
     parse_frames,
 )
@@ -70,13 +63,7 @@ __all__ = [
     "PROTOCOL_VERSION_V0",
     "PROTOCOL_VERSION_V1",
     # Protocol functions
-    "build_hello_frame",
     "build_packet",
-    "build_set_baby_formula_frame",
-    "build_set_mode_frame",
-    "build_set_my_temp_frame",
-    "build_status_request_frame",
-    "build_stop_frame",
     "parse_extended_status",
     "parse_frames",
 ]

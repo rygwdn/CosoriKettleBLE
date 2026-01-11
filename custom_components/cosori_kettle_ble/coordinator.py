@@ -31,12 +31,6 @@ from .cosori_kettle.protocol import (
     CompactStatus,
     ExtendedStatus,
     Frame,
-    build_hello_frame,
-    build_set_baby_formula_frame,
-    build_set_mode_frame,
-    build_set_my_temp_frame,
-    build_status_request_frame,
-    build_stop_frame,
     parse_compact_status,
     parse_extended_status,
 )
@@ -69,7 +63,6 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._ble_device = ble_device
         self._protocol_version = PROTOCOL_VERSION_V1
         self._registration_key = registration_key
-        self._tx_seq = 0
         self._lock = asyncio.Lock()
 
         # Device information
@@ -139,6 +132,8 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             # Create our BLE client wrapper
             self._client = CosoriKettleBLEClient(
                 ble_device,
+                registration_key=self._registration_key,
+                protocol_version=self._protocol_version,
                 notification_callback=self._frame_handler,
                 disconnected_callback=self._on_disconnect,
             )
@@ -150,6 +145,9 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._model_number = device_info.model_number
             self._manufacturer = device_info.manufacturer
             self._protocol_version = device_info.protocol_version
+
+            # Update protocol version on client if detected
+            self._client.set_protocol_version(device_info.protocol_version)
 
             # Now connect for actual communication
             await self._client.connect()
@@ -270,10 +268,7 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             ConfigEntryAuthFailed: If registration key is invalid
         """
         try:
-            # TODO: convert the build_x_frame functions into build_x_payload and have the client handle tx sequences and protocol version
-            frame = build_hello_frame(self._protocol_version, self._registration_key, self._tx_seq)
-            self._tx_seq = (self._tx_seq + 1) & 0xFF
-            await self._send_frame(frame)
+            await self._client.send_hello()
         except InvalidRegistrationKeyError as err:
             _LOGGER.error("Invalid registration key: %s", err)
             raise ConfigEntryAuthFailed(
@@ -310,9 +305,7 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                     await self._connect()
 
                 # Request status and wait for ACK
-                frame = build_status_request_frame(self._protocol_version, self._tx_seq)
-                self._tx_seq = (self._tx_seq + 1) & 0xFF
-                await self._send_frame(frame, wait_for_ack=True)
+                await self._client.send_status_request(wait_for_ack=True)
 
                 # Return current data (updated via notification handler)
                 return self.data or {}
@@ -324,27 +317,19 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     async def async_set_mode(self, mode: int, temp_f: int, hold_time: int) -> None:
         """Set heating mode."""
         async with self._lock:
-            frame = build_set_mode_frame(self._protocol_version, mode, temp_f, hold_time, self._tx_seq)
-            self._tx_seq = (self._tx_seq + 1) & 0xFF
-            await self._send_frame(frame)
+            await self._client.send_set_mode(mode, temp_f, hold_time)
 
     async def async_set_my_temp(self, temp_f: int) -> None:
         """Set my temp."""
         async with self._lock:
-            frame = build_set_my_temp_frame(self._protocol_version, temp_f, self._tx_seq)
-            self._tx_seq = (self._tx_seq + 1) & 0xFF
-            await self._send_frame(frame)
+            await self._client.send_set_my_temp(temp_f)
 
     async def async_set_baby_formula(self, enabled: bool) -> None:
         """Set baby formula mode."""
         async with self._lock:
-            frame = build_set_baby_formula_frame(self._protocol_version, enabled, self._tx_seq)
-            self._tx_seq = (self._tx_seq + 1) & 0xFF
-            await self._send_frame(frame)
+            await self._client.send_set_baby_formula(enabled)
 
     async def async_stop_heating(self) -> None:
         """Stop heating."""
         async with self._lock:
-            frame = build_stop_frame(self._protocol_version, self._tx_seq)
-            self._tx_seq = (self._tx_seq + 1) & 0xFF
-            await self._send_frame(frame)
+            await self._client.send_stop()

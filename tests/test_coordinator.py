@@ -17,13 +17,7 @@ from custom_components.cosori_kettle_ble.const import (
 from custom_components.cosori_kettle_ble.cosori_kettle.protocol import (
     ExtendedStatus,
     Frame,
-    build_hello_frame,
     build_packet,
-    build_set_baby_formula_frame,
-    build_set_mode_frame,
-    build_set_my_temp_frame,
-    build_status_request_frame,
-    build_stop_frame,
     parse_extended_status,
     parse_frames,
 )
@@ -81,6 +75,17 @@ def mock_cosori_client():
     client.connect = AsyncMock()
     client.disconnect = AsyncMock()
     client.send_frame = AsyncMock(return_value=b'\x01\x40\x40\x00')
+    # Mock all send_X methods
+    client.send_register = AsyncMock(return_value=b"")
+    client.send_hello = AsyncMock(return_value=b"")
+    client.send_status_request = AsyncMock(return_value=b"")
+    client.send_compact_status_request = AsyncMock(return_value=b"")
+    client.send_set_mode = AsyncMock(return_value=b"")
+    client.send_set_my_temp = AsyncMock(return_value=b"")
+    client.send_set_baby_formula = AsyncMock(return_value=b"")
+    client.send_set_hold_time = AsyncMock(return_value=b"")
+    client.send_stop = AsyncMock(return_value=b"")
+    client.set_protocol_version = Mock()
     return client
 
 
@@ -116,8 +121,6 @@ class TestCoordinatorInitialization:
         assert coordinator._protocol_version == PROTOCOL_VERSION_V1
         assert coordinator._registration_key == registration_key
         assert coordinator._client is None
-        assert coordinator._tx_seq == 0
-
     def test_init_sets_coordinator_name(self, coordinator, mock_ble_device):
         """Test that coordinator name is set correctly."""
         expected_name = f"{DOMAIN}_{mock_ble_device.address}"
@@ -305,40 +308,16 @@ class TestCoordinatorAsyncUpdateData:
             assert result == {}
 
     @pytest.mark.asyncio
-    async def test_async_update_data_increments_tx_seq(self, coordinator, mock_cosori_client):
-        """Test that async_update_data increments tx sequence."""
-        coordinator._client = mock_cosori_client
-        coordinator._tx_seq = 5
-        coordinator.data = {}
-
-        with patch.object(coordinator, "_send_frame", new_callable=AsyncMock):
-            await coordinator._async_update_data()
-            assert coordinator._tx_seq == 6
-
-    @pytest.mark.asyncio
-    async def test_async_update_data_wraps_seq_at_255(self, coordinator, mock_cosori_client):
-        """Test that tx_seq wraps at 255."""
-        coordinator._client = mock_cosori_client
-        coordinator._tx_seq = 255
-        coordinator.data = {}
-
-        with patch.object(coordinator, "_send_frame", new_callable=AsyncMock):
-            await coordinator._async_update_data()
-            assert coordinator._tx_seq == 0
-
-    @pytest.mark.asyncio
     async def test_async_update_data_handles_bleak_error(self, coordinator, mock_cosori_client):
         """Test async_update_data handles BleakError."""
         from bleak.exc import BleakError
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
         coordinator._client = mock_cosori_client
+        mock_cosori_client.send_status_request.side_effect = BleakError("Error")
 
-        with patch.object(coordinator, "_send_frame", new_callable=AsyncMock) as mock_send:
-            mock_send.side_effect = BleakError("Error")
-
-            with pytest.raises(UpdateFailed, match="Failed to update"):
-                await coordinator._async_update_data()
+        with pytest.raises(UpdateFailed, match="Failed to update"):
+            await coordinator._async_update_data()
 
     @pytest.mark.asyncio
     async def test_async_update_data_handles_timeout(self, coordinator, mock_cosori_client):
@@ -346,12 +325,10 @@ class TestCoordinatorAsyncUpdateData:
         from homeassistant.helpers.update_coordinator import UpdateFailed
 
         coordinator._client = mock_cosori_client
+        mock_cosori_client.send_status_request.side_effect = asyncio.TimeoutError()
 
-        with patch.object(coordinator, "_send_frame", new_callable=AsyncMock) as mock_send:
-            mock_send.side_effect = asyncio.TimeoutError()
-
-            with pytest.raises(UpdateFailed, match="Failed to update"):
-                await coordinator._async_update_data()
+        with pytest.raises(UpdateFailed, match="Failed to update"):
+            await coordinator._async_update_data()
 
     @pytest.mark.asyncio
     async def test_async_update_data_lock_prevents_concurrent_access(self, coordinator, mock_cosori_client):
@@ -361,22 +338,21 @@ class TestCoordinatorAsyncUpdateData:
 
         call_count = 0
 
-        async def slow_send_frame(frame, wait_for_ack=True):
+        async def slow_send_status(wait_for_ack=True):
             nonlocal call_count
             call_count += 1
             await asyncio.sleep(0.1)
 
-        with patch.object(coordinator, "_send_frame", new_callable=AsyncMock) as mock_send:
-            mock_send.side_effect = slow_send_frame
+        mock_cosori_client.send_status_request.side_effect = slow_send_status
 
-            # Start two concurrent updates
-            task1 = asyncio.create_task(coordinator._async_update_data())
-            task2 = asyncio.create_task(coordinator._async_update_data())
+        # Start two concurrent updates
+        task1 = asyncio.create_task(coordinator._async_update_data())
+        task2 = asyncio.create_task(coordinator._async_update_data())
 
-            await asyncio.gather(task1, task2)
+        await asyncio.gather(task1, task2)
 
-            # Both should complete but the second should wait for the first
-            assert call_count == 2
+        # Both should complete but the second should wait for the first
+        assert call_count == 2
 
 
 class TestCoordinatorSendFrame:
@@ -495,9 +471,7 @@ class TestCoordinatorCommandMethods:
         coordinator._client = mock_cosori_client
 
         await coordinator.async_set_mode(0x04, 212, 60)
-
-        assert coordinator._tx_seq == 1
-        mock_cosori_client.send_frame.assert_called_once()
+        mock_cosori_client.send_set_mode.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_set_mode_with_lock(self, coordinator, mock_cosori_client):
@@ -510,7 +484,7 @@ class TestCoordinatorCommandMethods:
             nonlocal call_count
             call_count += 1
 
-        mock_cosori_client.send_frame.side_effect = count_send
+        mock_cosori_client.send_set_mode.side_effect = count_send
 
         task1 = asyncio.create_task(coordinator.async_set_mode(0x04, 212, 60))
         task2 = asyncio.create_task(coordinator.async_set_mode(0x06, 200, 30))
@@ -526,9 +500,7 @@ class TestCoordinatorCommandMethods:
         coordinator._client = mock_cosori_client
 
         await coordinator.async_set_my_temp(180)
-
-        assert coordinator._tx_seq == 1
-        mock_cosori_client.send_frame.assert_called_once()
+        mock_cosori_client.send_set_my_temp.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_set_baby_formula(self, coordinator, mock_cosori_client):
@@ -536,9 +508,7 @@ class TestCoordinatorCommandMethods:
         coordinator._client = mock_cosori_client
 
         await coordinator.async_set_baby_formula(True)
-
-        assert coordinator._tx_seq == 1
-        mock_cosori_client.send_frame.assert_called_once()
+        mock_cosori_client.send_set_baby_formula.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_async_stop_heating(self, coordinator, mock_cosori_client):
@@ -546,9 +516,7 @@ class TestCoordinatorCommandMethods:
         coordinator._client = mock_cosori_client
 
         await coordinator.async_stop_heating()
-
-        assert coordinator._tx_seq == 1
-        mock_cosori_client.send_frame.assert_called_once()
+        mock_cosori_client.send_stop.assert_called_once()
 
 
 class TestCoordinatorNotificationHandler:
@@ -675,28 +643,6 @@ class TestCoordinatorUpdateDataFromStatus:
             assert data["heating"] is False
 
 
-class TestCoordinatorSendHello:
-    """Test _send_hello method."""
-
-    @pytest.mark.asyncio
-    async def test_send_hello_increments_seq(self, coordinator, mock_bleak_client):
-        """Test that _send_hello increments tx_seq."""
-        coordinator._client = mock_bleak_client
-        coordinator._tx_seq = 0
-
-        async def handle_write(*args, **kwargs):
-            if coordinator._pending_ack:
-                seq = list(coordinator._pending_ack.keys())[0]
-                if not coordinator._pending_ack[seq].done():
-                    coordinator._pending_ack[seq].set_result(b"\x01\x81\xD1\x00\x00")
-
-        mock_bleak_client.write_gatt_char.side_effect = handle_write
-
-        await coordinator._send_hello()
-
-        assert coordinator._tx_seq == 1
-
-
 class TestCoordinatorIntegration:
     """Integration tests."""
 
@@ -772,4 +718,3 @@ class TestCoordinatorIntegration:
         await coordinator.async_stop_heating()
 
         # All should succeed and increment seq
-        assert coordinator._tx_seq == 4

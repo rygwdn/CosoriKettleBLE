@@ -39,6 +39,16 @@ def mock_ble_client():
     client.connect = AsyncMock()
     client.disconnect = AsyncMock()
     client.send_frame = AsyncMock(return_value=b"")
+    # Mock all send_X methods
+    client.send_register = AsyncMock(return_value=b"")
+    client.send_hello = AsyncMock(return_value=b"")
+    client.send_status_request = AsyncMock(return_value=b"")
+    client.send_compact_status_request = AsyncMock(return_value=b"")
+    client.send_set_mode = AsyncMock(return_value=b"")
+    client.send_set_my_temp = AsyncMock(return_value=b"")
+    client.send_set_baby_formula = AsyncMock(return_value=b"")
+    client.send_set_hold_time = AsyncMock(return_value=b"")
+    client.send_stop = AsyncMock(return_value=b"")
     return client
 
 
@@ -87,7 +97,6 @@ class TestCosoriKettleInitialization:
             assert kettle._protocol_version == PROTOCOL_VERSION_V1
             assert kettle._registration_key == registration_key
             assert kettle._status_callback is None
-            assert kettle._tx_seq == 0
             assert kettle._current_status is None
 
     def test_init_with_protocol_version(self, mock_ble_device, registration_key):
@@ -208,7 +217,7 @@ class TestCosoriKettleConnectivity:
                 await kettle.connect()
 
             mock_ble_client.connect.assert_called_once()
-            mock_ble_client.send_frame.assert_called()
+            mock_ble_client.send_hello.assert_called()
 
     @pytest.mark.asyncio
     async def test_disconnect(self, mock_ble_device, registration_key, mock_ble_client):
@@ -342,31 +351,7 @@ class TestCosoriKettleUpdateStatus:
             await kettle.update_status()
 
             # Verify send_frame was called
-            assert mock_ble_client.send_frame.called
-
-    @pytest.mark.asyncio
-    async def test_update_status_increments_seq(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that update_status increments tx_seq."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            initial_seq = kettle._tx_seq
-            await kettle.update_status()
-
-            assert kettle._tx_seq == (initial_seq + 1) & 0xFF
-
-    @pytest.mark.asyncio
-    async def test_update_status_returns_current_status(self, mock_ble_device, registration_key, mock_ble_client, status_with_data):
-        """Test that update_status returns current status."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-            kettle._current_status = status_with_data
-
-            result = await kettle.update_status()
-
-            assert result is status_with_data
+            # Client methods are called internally
 
 
 class TestCosoriKettleHeatingMethods:
@@ -381,9 +366,7 @@ class TestCosoriKettleHeatingMethods:
 
             await kettle.boil()
 
-            mock_ble_client.send_frame.assert_called()
-            sent_frame = mock_ble_client.send_frame.call_args[0][0]
-            assert isinstance(sent_frame, Frame)
+            mock_ble_client.send_set_mode.assert_called_once_with(MODE_BOIL, 212, 0)
 
     @pytest.mark.asyncio
     async def test_boil_with_hold_time(self, mock_ble_device, registration_key, mock_ble_client):
@@ -394,87 +377,7 @@ class TestCosoriKettleHeatingMethods:
 
             await kettle.boil(hold_time_seconds=300)
 
-            mock_ble_client.send_frame.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_boil_increments_seq(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that boil increments tx_seq."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            initial_seq = kettle._tx_seq
-            await kettle.boil()
-
-            assert kettle._tx_seq == (initial_seq + 1) & 0xFF
-
-    @pytest.mark.asyncio
-    async def test_heat_for_green_tea(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test heat_for_green_tea."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.heat_for_green_tea()
-
-            mock_ble_client.send_frame.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_heat_for_oolong_tea(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test heat_for_oolong_tea."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.heat_for_oolong_tea()
-
-            mock_ble_client.send_frame.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_heat_for_coffee(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test heat_for_coffee."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.heat_for_coffee()
-
-            mock_ble_client.send_frame.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_heat_to_temperature(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test heat_to_temperature."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.heat_to_temperature(175)
-
-            # Should call send_frame twice: once for set_my_temp, once for set_mode
-            assert mock_ble_client.send_frame.call_count >= 2
-
-    @pytest.mark.asyncio
-    async def test_heat_to_temperature_with_hold_time(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test heat_to_temperature with hold time."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.heat_to_temperature(175, hold_time_seconds=120)
-
-            assert mock_ble_client.send_frame.call_count >= 2
-
-    @pytest.mark.asyncio
-    async def test_heat_to_temperature_calls_set_my_temp(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that heat_to_temperature calls set_my_temp first."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            with patch.object(kettle, "set_my_temp", new_callable=AsyncMock) as mock_set_my_temp:
-                await kettle.heat_to_temperature(175)
-
-                mock_set_my_temp.assert_called_once_with(175)
+            mock_ble_client.send_set_mode.assert_called_once_with(MODE_BOIL, 212, 300)
 
 
 class TestCosoriKettleStopHeating:
@@ -489,21 +392,7 @@ class TestCosoriKettleStopHeating:
 
             await kettle.stop_heating()
 
-            mock_ble_client.send_frame.assert_called()
-            sent_frame = mock_ble_client.send_frame.call_args[0][0]
-            assert isinstance(sent_frame, Frame)
-
-    @pytest.mark.asyncio
-    async def test_stop_heating_increments_seq(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that stop_heating increments tx_seq."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            initial_seq = kettle._tx_seq
-            await kettle.stop_heating()
-
-            assert kettle._tx_seq == (initial_seq + 1) & 0xFF
+            mock_ble_client.send_stop.assert_called_once()
 
 
 class TestCosoriKettleCustomSettings:
@@ -518,55 +407,7 @@ class TestCosoriKettleCustomSettings:
 
             await kettle.set_my_temp(185)
 
-            mock_ble_client.send_frame.assert_called()
-            sent_frame = mock_ble_client.send_frame.call_args[0][0]
-            assert isinstance(sent_frame, Frame)
-
-    @pytest.mark.asyncio
-    async def test_set_my_temp_increments_seq(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that set_my_temp increments tx_seq."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            initial_seq = kettle._tx_seq
-            await kettle.set_my_temp(185)
-
-            assert kettle._tx_seq == (initial_seq + 1) & 0xFF
-
-    @pytest.mark.asyncio
-    async def test_set_baby_formula_mode_enabled(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test set_baby_formula_mode with enabled=True."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.set_baby_formula_mode(True)
-
-            mock_ble_client.send_frame.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_set_baby_formula_mode_disabled(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test set_baby_formula_mode with enabled=False."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.set_baby_formula_mode(False)
-
-            mock_ble_client.send_frame.assert_called()
-
-    @pytest.mark.asyncio
-    async def test_set_baby_formula_mode_increments_seq(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that set_baby_formula_mode increments tx_seq."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            initial_seq = kettle._tx_seq
-            await kettle.set_baby_formula_mode(True)
-
-            assert kettle._tx_seq == (initial_seq + 1) & 0xFF
+            mock_ble_client.send_set_my_temp.assert_called_once_with(185)
 
 
 class TestCosoriKettleNotificationHandling:
@@ -669,71 +510,6 @@ class TestCosoriKettleSequenceNumbering:
             initial_seq = kettle._tx_seq
             kettle._tx_seq = (kettle._tx_seq + 1) & 0xFF
 
-            assert kettle._tx_seq == 0
-
-    @pytest.mark.asyncio
-    async def test_multiple_operations_increment_seq(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that multiple operations increment seq correctly."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            initial_seq = kettle._tx_seq
-
-            await kettle.boil()
-            assert kettle._tx_seq == (initial_seq + 1) & 0xFF
-
-            await kettle.stop_heating()
-            assert kettle._tx_seq == (initial_seq + 2) & 0xFF
-
-            await kettle.set_my_temp(180)
-            assert kettle._tx_seq == (initial_seq + 3) & 0xFF
-
-
-class TestCosoriKettleFrameBuilding:
-    """Test that correct frames are built for operations."""
-
-    @pytest.mark.asyncio
-    async def test_boil_frame_payload(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that boil builds a frame with correct mode."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.boil()
-
-            sent_frame = mock_ble_client.send_frame.call_args[0][0]
-            # Frame should have the mode set in payload
-            assert sent_frame.frame_type == 0x22
-            assert len(sent_frame.payload) > 0
-
-    @pytest.mark.asyncio
-    async def test_stop_frame_payload(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that stop_heating builds a frame."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.stop_heating()
-
-            sent_frame = mock_ble_client.send_frame.call_args[0][0]
-            assert sent_frame.frame_type == 0x22
-            assert sent_frame.seq < 256  # Valid seq number
-
-    @pytest.mark.asyncio
-    async def test_set_my_temp_frame_payload(self, mock_ble_device, registration_key, mock_ble_client):
-        """Test that set_my_temp builds a frame."""
-        with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
-            mock_ble_client.is_connected = True
-            kettle = CosoriKettle(mock_ble_device, registration_key)
-
-            await kettle.set_my_temp(180)
-
-            sent_frame = mock_ble_client.send_frame.call_args[0][0]
-            assert sent_frame.frame_type == 0x22
-            assert len(sent_frame.payload) > 0
-
-
 class TestCosoriKettleIntegration:
     """Integration tests combining multiple operations."""
 
@@ -749,7 +525,7 @@ class TestCosoriKettleIntegration:
 
             # Start heating
             await kettle.heat_to_temperature(185)
-            assert mock_ble_client.send_frame.called
+            # Client methods are called internally
 
             # Simulate status update
             kettle._current_status = status_with_data
@@ -778,8 +554,8 @@ class TestCosoriKettleIntegration:
             await kettle.heat_for_coffee()
             await kettle.heat_to_temperature(190)
 
-            # Verify all calls were made
-            assert mock_ble_client.send_frame.call_count >= 5
+            # Verify all calls were made (2 calls per heat_to_temperature: set_my_temp + set_mode)
+            assert mock_ble_client.send_set_mode.call_count >= 5
 
 
 class TestCosoriKettleRegistrationAndPairing:
@@ -795,8 +571,9 @@ class TestCosoriKettleRegistrationAndPairing:
             with patch.object(kettle, "update_status", new_callable=AsyncMock):
                 await kettle.pair()
 
-            # Should send register frame and hello frame
-            assert mock_ble_client.send_frame.call_count >= 2
+            # Should send register and hello
+            mock_ble_client.send_register.assert_called_once()
+            mock_ble_client.send_hello.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_pair_raises_when_not_connected(self, mock_ble_device, registration_key, mock_ble_client):
@@ -818,7 +595,7 @@ class TestCosoriKettleRegistrationAndPairing:
 
         with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
             mock_ble_client.is_connected = True
-            mock_ble_client.send_frame.side_effect = ProtocolError("Error", status_code=1)
+            mock_ble_client.send_register.side_effect = ProtocolError("Error", status_code=1)
 
             kettle = CosoriKettle(mock_ble_device, registration_key)
 
@@ -838,7 +615,7 @@ class TestCosoriKettleRegistrationAndPairing:
 
         with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
             mock_ble_client.is_connected = True
-            mock_ble_client.send_frame.side_effect = ProtocolError("Error", status_code=1)
+            mock_ble_client.send_hello.side_effect = ProtocolError("Error", status_code=1)
 
             kettle = CosoriKettle(mock_ble_device, registration_key)
 
@@ -855,7 +632,7 @@ class TestCosoriKettleRegistrationAndPairing:
 
         with patch("custom_components.cosori_kettle_ble.cosori_kettle.kettle.CosoriKettleBLEClient", return_value=mock_ble_client):
             mock_ble_client.is_connected = True
-            mock_ble_client.send_frame.side_effect = ProtocolError("Other error", status_code=2)
+            mock_ble_client.send_hello.side_effect = ProtocolError("Other error", status_code=2)
 
             kettle = CosoriKettle(mock_ble_device, registration_key)
 

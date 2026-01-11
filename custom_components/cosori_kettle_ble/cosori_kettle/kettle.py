@@ -14,23 +14,14 @@ from .exceptions import (
     ProtocolError,
 )
 from .protocol import (
-    ACK_HEADER_TYPE,
-    PROTOCOL_VERSION_V1,
     ExtendedStatus,
-    Frame,
-    build_hello_frame,
-    build_register_frame,
-    build_set_baby_formula_frame,
-    build_set_mode_frame,
-    build_set_my_temp_frame,
-    build_status_request_frame,
-    build_stop_frame,
-    parse_extended_status,
     MODE_BOIL,
     MODE_COFFEE,
     MODE_GREEN_TEA,
     MODE_MY_TEMP,
     MODE_OOLONG,
+    PROTOCOL_VERSION_V1,
+    parse_extended_status,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -70,12 +61,13 @@ class CosoriKettle:
         self._protocol_version = protocol_version
         self._registration_key = registration_key
         self._status_callback = status_callback
-        self._tx_seq = 0
         self._current_status: ExtendedStatus | None = None
 
-        # Create BLE client
+        # Create BLE client with protocol info
         self._client = CosoriKettleBLEClient(
             ble_device,
+            registration_key=registration_key,
+            protocol_version=protocol_version,
             notification_callback=self._on_notification,
         )
 
@@ -164,11 +156,8 @@ class CosoriKettle:
             InvalidRegistrationKeyError: If key is rejected (status=1)
             ProtocolError: Other protocol errors
         """
-        frame = build_hello_frame(self._protocol_version, self._registration_key, self._tx_seq)
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-
         try:
-            await self._client.send_frame(frame)
+            await self._client.send_hello()
         except ProtocolError as err:
             if err.status_code == 1:
                 raise InvalidRegistrationKeyError(
@@ -184,15 +173,8 @@ class CosoriKettle:
             DeviceNotInPairingModeError: If device not in pairing mode (status=1)
             ProtocolError: Other protocol errors
         """
-        frame = build_register_frame(
-            self._protocol_version,
-            self._registration_key,
-            self._tx_seq,
-        )
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-
         try:
-            await self._client.send_frame(frame)
+            await self._client.send_register()
         except ProtocolError as err:
             if err.status_code == 1:
                 raise DeviceNotInPairingModeError(
@@ -207,9 +189,7 @@ class CosoriKettle:
         Returns:
             Current status or None if update failed
         """
-        frame = build_status_request_frame(self._protocol_version, self._tx_seq)
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+        await self._client.send_status_request()
 
         # Wait a bit for response
         await asyncio.sleep(0.5)
@@ -227,15 +207,7 @@ class CosoriKettle:
         await self.set_my_temp(temp_f)
 
         # Start heating in MY_TEMP mode
-        frame = build_set_mode_frame(
-            self._protocol_version,
-            MODE_MY_TEMP,
-            temp_f,
-            hold_time_seconds,
-            self._tx_seq,
-        )
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+        await self._client.send_set_mode(MODE_MY_TEMP, temp_f, hold_time_seconds)
 
     async def boil(self, hold_time_seconds: int = 0) -> None:
         """Boil water (212°F).
@@ -243,15 +215,7 @@ class CosoriKettle:
         Args:
             hold_time_seconds: How long to keep warm after boiling
         """
-        frame = build_set_mode_frame(
-            self._protocol_version,
-            MODE_BOIL,
-            212,
-            hold_time_seconds,
-            self._tx_seq,
-        )
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+        await self._client.send_set_mode(MODE_BOIL, 212, hold_time_seconds)
 
     async def heat_for_green_tea(self, hold_time_seconds: int = 0) -> None:
         """Heat water for green tea (180°F).
@@ -259,15 +223,7 @@ class CosoriKettle:
         Args:
             hold_time_seconds: How long to keep warm after heating
         """
-        frame = build_set_mode_frame(
-            self._protocol_version,
-            MODE_GREEN_TEA,
-            180,
-            hold_time_seconds,
-            self._tx_seq,
-        )
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+        await self._client.send_set_mode(MODE_GREEN_TEA, 180, hold_time_seconds)
 
     async def heat_for_oolong_tea(self, hold_time_seconds: int = 0) -> None:
         """Heat water for oolong tea (195°F).
@@ -275,15 +231,7 @@ class CosoriKettle:
         Args:
             hold_time_seconds: How long to keep warm after heating
         """
-        frame = build_set_mode_frame(
-            self._protocol_version,
-            MODE_OOLONG,
-            195,
-            hold_time_seconds,
-            self._tx_seq,
-        )
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+        await self._client.send_set_mode(MODE_OOLONG, 195, hold_time_seconds)
 
     async def heat_for_coffee(self, hold_time_seconds: int = 0) -> None:
         """Heat water for coffee (205°F).
@@ -291,21 +239,11 @@ class CosoriKettle:
         Args:
             hold_time_seconds: How long to keep warm after heating
         """
-        frame = build_set_mode_frame(
-            self._protocol_version,
-            MODE_COFFEE,
-            205,
-            hold_time_seconds,
-            self._tx_seq,
-        )
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+        await self._client.send_set_mode(MODE_COFFEE, 205, hold_time_seconds)
 
     async def stop_heating(self) -> None:
         """Stop the current heating operation."""
-        frame = build_stop_frame(self._protocol_version, self._tx_seq)
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+        await self._client.send_stop()
 
     async def set_my_temp(self, temp_f: int) -> None:
         """Set the custom temperature setting.
@@ -313,9 +251,7 @@ class CosoriKettle:
         Args:
             temp_f: Temperature in Fahrenheit (104-212)
         """
-        frame = build_set_my_temp_frame(self._protocol_version, temp_f, self._tx_seq)
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+        await self._client.send_set_my_temp(temp_f)
 
     async def set_baby_formula_mode(self, enabled: bool) -> None:
         """Enable or disable baby formula mode.
@@ -323,6 +259,4 @@ class CosoriKettle:
         Args:
             enabled: Whether to enable baby formula mode
         """
-        frame = build_set_baby_formula_frame(self._protocol_version, enabled, self._tx_seq)
-        self._tx_seq = (self._tx_seq + 1) & 0xFF
-        await self._client.send_frame(frame)
+        await self._client.send_set_baby_formula(enabled)

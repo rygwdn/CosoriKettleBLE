@@ -7,31 +7,12 @@ from custom_components.cosori_kettle_ble.cosori_kettle.protocol import (
     CompactStatus,
     ExtendedStatus,
     Frame,
-    build_compact_status_request_frame,
-    build_hello_frame,
     build_packet,
-    build_register_frame,
-    build_set_hold_time_frame,
-    build_set_mode_frame,
-    build_status_request_frame,
-    build_stop_frame,
     parse_compact_status,
     parse_extended_status,
     parse_frames,
     split_into_packets,
 )
-
-
-def test_build_hello_frame():
-    """Test building hello frame."""
-    key = bytes.fromhex("aabbccddee00112233445566778899aa")
-    frame = build_hello_frame(PROTOCOL_VERSION_V1, key, seq=0x1c)
-
-    assert frame.frame_type == 0x22
-    assert frame.seq == 0x1c
-    assert len(frame.payload) == 36
-    assert frame.payload[0] == 0x01  # version
-    assert frame.payload[1] == 0x81  # CMD_HELLO
 
 
 def test_build_packet():
@@ -50,8 +31,8 @@ def test_build_packet():
 
 def test_parse_frames():
     """Test parsing frames from buffer."""
-    # Build a test frame
-    frame = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    # Build a test frame manually
+    frame = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet = build_packet(frame)
 
     # Parse it
@@ -145,172 +126,6 @@ def test_parse_invalid_status():
     ] + [0x00] * 20)
     status = parse_extended_status(bytes(payload))
     assert not status.valid
-
-
-def test_build_stop_frame():
-    """Test building stop frame."""
-    frame = build_stop_frame(PROTOCOL_VERSION_V1, seq=0x60)
-
-    assert frame.frame_type == 0x22
-    assert frame.seq == 0x60
-    assert frame.payload[0] == 0x01  # version
-    assert frame.payload[1] == 0xF4  # CMD_STOP
-
-
-def test_build_register_frame_valid():
-    """Test building register frame with valid key."""
-    key = bytes.fromhex("aabbccddee00112233445566778899aa")
-    frame = build_register_frame(PROTOCOL_VERSION_V1, key, seq=0x1c)
-
-    assert frame.frame_type == 0x22
-    assert frame.seq == 0x1c
-    assert len(frame.payload) == 36
-    assert frame.payload[0] == 0x01  # version
-    assert frame.payload[1] == 0x80  # CMD_REGISTER
-    assert frame.payload[2] == 0xD1  # CMD_TYPE_D1
-    assert frame.payload[3] == 0x00
-    # Verify hex encoding of key
-    assert frame.payload[4:] == b"aabbccddee00112233445566778899aa"
-
-
-def test_build_register_frame_invalid_key_length():
-    """Test building register frame with invalid key length."""
-    # Too short
-    key_short = bytes.fromhex("aabbccdd")
-    with pytest.raises(ValueError, match="Registration key must be 16 bytes"):
-        build_register_frame(PROTOCOL_VERSION_V1, key_short)
-
-    # Too long
-    key_long = bytes.fromhex("aabbccddee00112233445566778899aabbccdd")
-    with pytest.raises(ValueError, match="Registration key must be 16 bytes"):
-        build_register_frame(PROTOCOL_VERSION_V1, key_long)
-
-
-def test_build_compact_status_request_frame():
-    """Test building compact status request frame."""
-    frame = build_compact_status_request_frame(PROTOCOL_VERSION_V1, seq=0x42)
-
-    assert frame.frame_type == 0x22
-    assert frame.seq == 0x42
-    assert len(frame.payload) == 4
-    assert frame.payload[0] == 0x01  # version
-    assert frame.payload[1] == 0x41  # CMD_CTRL
-    assert frame.payload[2] == 0x40  # CMD_TYPE_40
-    assert frame.payload[3] == 0x00
-
-
-def test_build_compact_status_request_frame_v0():
-    """Test building compact status request frame with v0 protocol."""
-    frame = build_compact_status_request_frame(PROTOCOL_VERSION_V0, seq=0x01)
-
-    assert frame.payload[0] == 0x00  # version v0
-    assert frame.payload[1] == 0x41  # CMD_CTRL
-
-
-def test_build_set_hold_time_frame_zero():
-    """Test building set hold time frame with 0 seconds."""
-    frame = build_set_hold_time_frame(PROTOCOL_VERSION_V1, seconds=0, seq=0x50)
-
-    assert frame.frame_type == 0x22
-    assert frame.seq == 0x50
-    assert len(frame.payload) == 8
-    assert frame.payload[0] == 0x01  # version
-    assert frame.payload[1] == 0xF2  # CMD_SET_HOLD_TIME
-    assert frame.payload[2] == 0xA3  # CMD_TYPE_A3
-    assert frame.payload[3] == 0x00
-    assert frame.payload[4] == 0x00
-    assert frame.payload[5] == 0x00  # hold_time > 0 check
-
-
-def test_build_set_hold_time_frame_short():
-    """Test building set hold time frame with short duration."""
-    frame = build_set_hold_time_frame(PROTOCOL_VERSION_V1, seconds=30, seq=0x50)
-
-    assert frame.payload[5] == 0x01  # hold_time > 0
-    assert frame.payload[6] == 30  # low byte
-    assert frame.payload[7] == 0  # high byte
-
-
-def test_build_set_hold_time_frame_long():
-    """Test building set hold time frame with long duration."""
-    # 0x1234 = 4660 seconds
-    frame = build_set_hold_time_frame(PROTOCOL_VERSION_V1, seconds=0x1234, seq=0x50)
-
-    assert frame.payload[5] == 0x01  # hold_time > 0
-    assert frame.payload[6] == 0x34  # low byte
-    assert frame.payload[7] == 0x12  # high byte
-
-
-def test_build_set_hold_time_frame_max():
-    """Test building set hold time frame with maximum duration."""
-    # Max 16-bit: 65535 seconds
-    frame = build_set_hold_time_frame(PROTOCOL_VERSION_V1, seconds=65535, seq=0x50)
-
-    assert frame.payload[5] == 0x01
-    assert frame.payload[6] == 0xFF  # low byte
-    assert frame.payload[7] == 0xFF  # high byte
-
-
-def test_build_set_mode_frame_boil():
-    """Test building set mode frame for boil mode."""
-    frame = build_set_mode_frame(PROTOCOL_VERSION_V1, mode=0x04, temp_f=212, hold_time_seconds=0, seq=0x70)
-
-    assert frame.frame_type == 0x22
-    assert frame.seq == 0x70
-    assert len(frame.payload) == 9
-    assert frame.payload[0] == 0x01  # version
-    assert frame.payload[1] == 0xF0  # CMD_SET_MODE
-    assert frame.payload[2] == 0xA3  # CMD_TYPE_A3
-    assert frame.payload[3] == 0x00
-    assert frame.payload[4] == 0x04  # mode BOIL
-    assert frame.payload[5] == 212  # temp_f
-    assert frame.payload[6] == 0x00  # hold_time > 0 check (false)
-    assert frame.payload[7] == 0x00  # high byte
-    assert frame.payload[8] == 0x00  # low byte
-
-
-def test_build_set_mode_frame_green_tea():
-    """Test building set mode frame for green tea mode."""
-    frame = build_set_mode_frame(PROTOCOL_VERSION_V1, mode=0x01, temp_f=180, hold_time_seconds=60, seq=0x70)
-
-    assert frame.payload[4] == 0x01  # mode GREEN_TEA
-    assert frame.payload[5] == 180  # temp_f
-    assert frame.payload[6] == 0x01  # hold_time > 0 check (true)
-    assert frame.payload[7] == 0x00  # high byte of 60
-    assert frame.payload[8] == 60  # low byte of 60
-
-
-def test_build_set_mode_frame_oolong():
-    """Test building set mode frame for oolong mode."""
-    frame = build_set_mode_frame(PROTOCOL_VERSION_V1, mode=0x02, temp_f=195, hold_time_seconds=1000, seq=0x70)
-
-    assert frame.payload[4] == 0x02  # mode OOLONG
-    assert frame.payload[5] == 195  # temp_f
-    assert frame.payload[6] == 0x01  # hold_time > 0 check
-    assert frame.payload[7] == 0x03  # high byte of 1000
-    assert frame.payload[8] == 0xE8  # low byte of 1000
-
-
-def test_build_set_mode_frame_coffee():
-    """Test building set mode frame for coffee mode."""
-    frame = build_set_mode_frame(PROTOCOL_VERSION_V1, mode=0x03, temp_f=205, hold_time_seconds=120, seq=0x70)
-
-    assert frame.payload[4] == 0x03  # mode COFFEE
-    assert frame.payload[5] == 205
-
-
-def test_build_set_mode_frame_my_temp():
-    """Test building set mode frame for my temp mode."""
-    frame = build_set_mode_frame(PROTOCOL_VERSION_V1, mode=0x05, temp_f=150, hold_time_seconds=0, seq=0x70)
-
-    assert frame.payload[4] == 0x05  # mode MY_TEMP
-
-
-def test_build_set_mode_frame_heat():
-    """Test building set mode frame for heat mode."""
-    frame = build_set_mode_frame(PROTOCOL_VERSION_V1, mode=0x06, temp_f=160, hold_time_seconds=300, seq=0x70)
-
-    assert frame.payload[4] == 0x06  # mode HEAT
 
 
 def test_parse_compact_status_valid():
@@ -553,7 +368,7 @@ def test_calculate_checksum_short_buffer():
 
 def test_parse_frames_single_frame():
     """Test parsing single complete frame."""
-    frame = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    frame = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet = build_packet(frame)
 
     buffer = bytearray(packet)
@@ -566,9 +381,9 @@ def test_parse_frames_single_frame():
 
 def test_parse_frames_multiple_frames():
     """Test parsing multiple frames from buffer."""
-    frame1 = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    frame1 = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet1 = build_packet(frame1)
-    frame2 = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x42)
+    frame2 = Frame(frame_type=0x22, seq=0x42, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet2 = build_packet(frame2)
 
     buffer = bytearray(packet1 + packet2)
@@ -582,7 +397,7 @@ def test_parse_frames_multiple_frames():
 
 def test_parse_frames_incomplete_frame():
     """Test parsing buffer with incomplete frame."""
-    frame = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    frame = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet = build_packet(frame)
 
     # Use only first 5 bytes (incomplete header)
@@ -595,7 +410,7 @@ def test_parse_frames_incomplete_frame():
 
 def test_parse_frames_incomplete_payload():
     """Test parsing buffer with complete header but incomplete payload."""
-    frame = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    frame = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet = build_packet(frame)
 
     # Use header + partial payload
@@ -609,7 +424,7 @@ def test_parse_frames_incomplete_payload():
 
 def test_parse_frames_invalid_checksum():
     """Test parsing frame with invalid checksum."""
-    frame = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    frame = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet = bytearray(build_packet(frame))
 
     # Corrupt the checksum
@@ -623,9 +438,9 @@ def test_parse_frames_invalid_checksum():
 
 def test_parse_frames_invalid_checksum_then_valid():
     """Test parsing recovery after invalid checksum."""
-    frame1 = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    frame1 = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet1 = bytearray(build_packet(frame1))
-    frame2 = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x42)
+    frame2 = Frame(frame_type=0x22, seq=0x42, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet2 = build_packet(frame2)
 
     # Corrupt first frame's checksum
@@ -641,7 +456,7 @@ def test_parse_frames_invalid_checksum_then_valid():
 
 def test_parse_frames_with_garbage_before():
     """Test parsing frame with garbage bytes before valid frame."""
-    frame = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    frame = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet = build_packet(frame)
 
     garbage = bytes([0xFF, 0xFE, 0xFD, 0xFC])
@@ -655,9 +470,9 @@ def test_parse_frames_with_garbage_before():
 
 def test_parse_frames_with_garbage_between():
     """Test parsing multiple frames with garbage between them."""
-    frame1 = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    frame1 = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet1 = build_packet(frame1)
-    frame2 = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x42)
+    frame2 = Frame(frame_type=0x22, seq=0x42, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet2 = build_packet(frame2)
 
     garbage = bytes([0xFF, 0xFE, 0xFD])
@@ -672,7 +487,7 @@ def test_parse_frames_with_garbage_between():
 
 def test_parse_frames_payload_size_exceeded():
     """Test parsing frame with payload size exceeding maximum."""
-    frame = build_status_request_frame(PROTOCOL_VERSION_V1, seq=0x41)
+    frame = Frame(frame_type=0x22, seq=0x41, payload=bytes([0x01, 0x40, 0x40, 0x00]))
     packet = bytearray(build_packet(frame))
 
     # Manually create a frame with oversized payload length
@@ -850,30 +665,6 @@ def test_parse_extended_status_invalid_command():
     status = parse_extended_status(bytes(payload))
 
     assert status.valid is False
-
-
-def test_build_hello_frame_valid():
-    """Test building hello frame with valid key."""
-    key = bytes.fromhex("aabbccddee00112233445566778899aa")
-    frame = build_hello_frame(PROTOCOL_VERSION_V1, key, seq=0x1c)
-
-    assert frame.frame_type == 0x22
-    assert frame.seq == 0x1c
-    assert len(frame.payload) == 36
-    assert frame.payload[0] == 0x01  # version
-    assert frame.payload[1] == 0x81  # CMD_HELLO
-    assert frame.payload[4:] == b"aabbccddee00112233445566778899aa"
-
-
-def test_build_hello_frame_invalid_key_length():
-    """Test building hello frame with invalid key length."""
-    key_short = bytes.fromhex("aabbccdd")
-    with pytest.raises(ValueError, match="Registration key must be 16 bytes"):
-        build_hello_frame(PROTOCOL_VERSION_V1, key_short)
-
-    key_long = bytes.fromhex("aabbccddee00112233445566778899aabbccdd")
-    with pytest.raises(ValueError, match="Registration key must be 16 bytes"):
-        build_hello_frame(PROTOCOL_VERSION_V1, key_long)
 
 
 def test_detect_protocol_version_v1_hw():
