@@ -17,6 +17,7 @@ from .exceptions import ProtocolError
 from .protocol import (
     ACK_HEADER_TYPE,
     CMD_CTRL,
+    CMD_DELAYED_START,
     CMD_HELLO,
     CMD_POLL,
     CMD_REGISTER,
@@ -577,6 +578,55 @@ class CosoriKettleBLEClient:
             0x00,
             mode,
             temp_f,
+            0x01 if hold_time_seconds > 0 else 0x00,
+            (hold_time_seconds >> 8) & 0xFF,
+            hold_time_seconds & 0xFF,
+        ])
+        frame = Frame(frame_type=MESSAGE_HEADER_TYPE, seq=self._tx_seq, payload=payload)
+        result = await self.send_frame(frame, wait_for_ack)
+        self._tx_seq = (self._tx_seq + 1) & 0xFF
+        return result
+
+    async def send_delayed_start(
+        self, delay_minutes: int, mode: int, temp_f: int, hold_time_seconds: int, wait_for_ack: bool = True
+    ) -> bytes | None:
+        """Send delayed start packet.
+
+        Args:
+            delay_minutes: Delay in minutes before starting (0-1440 minutes, max 24 hours)
+            mode: Heating mode (MODE_BOIL, MODE_HEAT, MODE_GREEN_TEA, etc.)
+            temp_f: Target temperature in Fahrenheit
+            hold_time_seconds: Duration to hold temperature after reaching target (seconds)
+            wait_for_ack: Whether to wait for ACK response
+
+        Returns:
+            ACK payload if waiting for ACK, None otherwise
+
+        Raises:
+            RuntimeError: If not connected
+            ValueError: If delay_minutes is out of range
+        """
+        if delay_minutes < 0 or delay_minutes > 1440:
+            raise ValueError("Delay must be between 0 and 1440 minutes")
+
+        # Convert minutes to seconds for protocol (protocol expects seconds as 2-byte BE)
+        delay_seconds = delay_minutes * 60
+
+        # Protocol format: delay (2B BE), mode (2B BE), hold_enable (1B), hold_time (2B BE)
+        delay_hi = (delay_seconds >> 8) & 0xFF
+        delay_lo = delay_seconds & 0xFF
+        mode_hi = (mode >> 8) & 0xFF
+        mode_lo = mode & 0xFF
+
+        payload = bytes([
+            self._protocol_version,
+            CMD_DELAYED_START,
+            CMD_TYPE_A3,
+            0x00,
+            delay_hi,
+            delay_lo,
+            mode_hi,
+            mode_lo,
             0x01 if hold_time_seconds > 0 else 0x00,
             (hold_time_seconds >> 8) & 0xFF,
             hold_time_seconds & 0xFF,
