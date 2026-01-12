@@ -139,3 +139,13 @@ The integration stores the registration key in the config entry and uses it for 
 - **Core library:** `custom_components/cosori_kettle_ble/cosori_kettle/`
 - **HA integration:** `custom_components/cosori_kettle_ble/*.py`
 - **Tests:** `tests/` - comprehensive test coverage
+
+## Interactive Debugging and Development
+
+For interactive debugging or standalone use of the protocol library, you can import it directly without Home Assistant dependencies:
+
+```python
+import sys
+sys.path.insert(0, 'custom_components/cosori_kettle_ble')
+from cosori_kettle.protocol import ...
+```
