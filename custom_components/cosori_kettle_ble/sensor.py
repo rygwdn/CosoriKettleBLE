@@ -14,6 +14,11 @@ from homeassistant.components.sensor import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import UnitOfTemperature, UnitOfTime
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import (
+    CONNECTION_BLUETOOTH,
+    DeviceInfo,
+    format_mac,
+)
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -121,21 +126,26 @@ class CosoriKettleSensor(CoordinatorEntity[CosoriKettleCoordinator], SensorEntit
     def __init__(
         self,
         coordinator: CosoriKettleCoordinator,
-        entry: ConfigEntry,
+        _: ConfigEntry,
         description: CosoriKettleSensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.entity_description = description
-        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "Cosori Kettle",
-            "manufacturer": coordinator.manufacturer or "Cosori",
-            "model": coordinator.model_number or "Smart Kettle",
-            "hw_version": coordinator.hardware_version,
-            "sw_version": coordinator.software_version,
-        }
+
+        formatted_mac = format_mac(coordinator.address)
+        self._attr_unique_id = f"{formatted_mac}_{description.key}"
+
+        self._attr_device_info = DeviceInfo(
+            identifiers={(DOMAIN, formatted_mac)},
+            name="Cosori Kettle",
+            manufacturer=coordinator.manufacturer or "Cosori",
+            model=coordinator.model_number or "Smart Kettle",
+            hw_version=coordinator.hardware_version,
+            sw_version=coordinator.software_version,
+            suggested_area="Kitchen",
+            connections={(CONNECTION_BLUETOOTH, coordinator.address)},
+        )
 
     @property
     def native_value(self) -> any:

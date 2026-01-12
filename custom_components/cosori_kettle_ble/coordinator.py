@@ -77,6 +77,11 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._client: CosoriKettleBLEClient | None = None
 
     @property
+    def address(self) -> str | None:
+        """Return the mac address of the kettle."""
+        self._ble_device.address
+
+    @property
     def hardware_version(self) -> str | None:
         """Return the hardware version."""
         return self._hw_version
