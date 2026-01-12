@@ -2,6 +2,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from homeassistant.components.climate import (
+    PRESET_NONE,
     ClimateEntity,
     ClimateEntityFeature,
     HVACAction,
@@ -22,13 +23,13 @@ from custom_components.cosori_kettle_ble.const import (
 )
 from custom_components.cosori_kettle_ble.climate import (
     CosoriKettleClimate,
-    HVAC_MODE_BOIL,
-    HVAC_MODE_COFFEE,
-    HVAC_MODE_GREEN_TEA,
-    HVAC_MODE_OOLONG,
-    HVAC_MODE_MY_TEMP,
-    HVAC_MODE_TO_KETTLE_MODE,
-    KETTLE_MODE_TO_HVAC_MODE,
+    PRESET_BOIL,
+    PRESET_COFFEE,
+    PRESET_GREEN_TEA,
+    PRESET_OOLONG,
+    PRESET_MY_TEMP,
+    PRESET_TO_KETTLE_MODE,
+    KETTLE_MODE_TO_PRESET,
     MODE_TEMPS,
 )
 
@@ -49,6 +50,13 @@ def mock_coordinator():
     coordinator.model_number = "Smart Kettle"
     coordinator.hardware_version = None
     coordinator.software_version = None
+    coordinator.formatted_address = "test_entry_id"
+    coordinator.device_info = {
+        "identifiers": {(DOMAIN, "test_entry_id")},
+        "name": "Cosori Kettle",
+        "manufacturer": "Cosori",
+        "model": "Smart Kettle",
+    }
     coordinator.async_set_mode = AsyncMock()
     coordinator.async_request_refresh = AsyncMock()
     coordinator.async_stop_heating = AsyncMock()
@@ -93,20 +101,25 @@ class TestCosoriKettleClimateInitialization:
 
     def test_hvac_modes(self, climate_entity):
         """Test supported HVAC modes."""
-        expected_modes = [
-            HVACMode.OFF,
-            HVAC_MODE_BOIL,
-            HVAC_MODE_GREEN_TEA,
-            HVAC_MODE_OOLONG,
-            HVAC_MODE_COFFEE,
-            HVAC_MODE_MY_TEMP,
-        ]
+        expected_modes = [HVACMode.OFF, HVACMode.HEAT]
         assert climate_entity._attr_hvac_modes == expected_modes
+
+    def test_preset_modes(self, climate_entity):
+        """Test supported preset modes."""
+        expected_presets = [
+            PRESET_BOIL,
+            PRESET_GREEN_TEA,
+            PRESET_OOLONG,
+            PRESET_COFFEE,
+            PRESET_MY_TEMP,
+        ]
+        assert climate_entity._attr_preset_modes == expected_presets
 
     def test_supported_features(self, climate_entity):
         """Test supported climate features."""
         expected_features = (
             ClimateEntityFeature.TARGET_TEMPERATURE
+            | ClimateEntityFeature.PRESET_MODE
             | ClimateEntityFeature.TURN_OFF
             | ClimateEntityFeature.TURN_ON
         )
@@ -147,30 +160,10 @@ class TestCosoriKettleClimateProperties:
         mock_coordinator.data = None
         assert climate_entity.target_temperature is None
 
-    def test_hvac_mode_boil(self, climate_entity, mock_coordinator):
-        """Test HVAC mode is BOIL when heating in boil mode."""
+    def test_hvac_mode_heat_when_heating(self, climate_entity, mock_coordinator):
+        """Test HVAC mode is HEAT when actively heating."""
         mock_coordinator.data = {"heating": True, "mode": MODE_BOIL}
-        assert climate_entity.hvac_mode == HVAC_MODE_BOIL
-
-    def test_hvac_mode_green_tea(self, climate_entity, mock_coordinator):
-        """Test HVAC mode is GREEN_TEA when heating in green tea mode."""
-        mock_coordinator.data = {"heating": True, "mode": MODE_GREEN_TEA}
-        assert climate_entity.hvac_mode == HVAC_MODE_GREEN_TEA
-
-    def test_hvac_mode_oolong(self, climate_entity, mock_coordinator):
-        """Test HVAC mode is OOLONG when heating in oolong mode."""
-        mock_coordinator.data = {"heating": True, "mode": MODE_OOLONG}
-        assert climate_entity.hvac_mode == HVAC_MODE_OOLONG
-
-    def test_hvac_mode_coffee(self, climate_entity, mock_coordinator):
-        """Test HVAC mode is COFFEE when heating in coffee mode."""
-        mock_coordinator.data = {"heating": True, "mode": MODE_COFFEE}
-        assert climate_entity.hvac_mode == HVAC_MODE_COFFEE
-
-    def test_hvac_mode_my_temp(self, climate_entity, mock_coordinator):
-        """Test HVAC mode is MY_TEMP when heating in my temp mode."""
-        mock_coordinator.data = {"heating": True, "mode": MODE_MY_TEMP}
-        assert climate_entity.hvac_mode == HVAC_MODE_MY_TEMP
+        assert climate_entity.hvac_mode == HVACMode.HEAT
 
     def test_hvac_mode_off(self, climate_entity, mock_coordinator):
         """Test HVAC mode is OFF when not heating."""
@@ -181,6 +174,36 @@ class TestCosoriKettleClimateProperties:
         """Test HVAC mode is OFF when no coordinator data."""
         mock_coordinator.data = None
         assert climate_entity.hvac_mode == HVACMode.OFF
+
+    def test_preset_mode_boil(self, climate_entity, mock_coordinator):
+        """Test preset mode is BOIL when in boil mode."""
+        mock_coordinator.data = {"mode": MODE_BOIL}
+        assert climate_entity.preset_mode == PRESET_BOIL
+
+    def test_preset_mode_green_tea(self, climate_entity, mock_coordinator):
+        """Test preset mode is GREEN_TEA when in green tea mode."""
+        mock_coordinator.data = {"mode": MODE_GREEN_TEA}
+        assert climate_entity.preset_mode == PRESET_GREEN_TEA
+
+    def test_preset_mode_oolong(self, climate_entity, mock_coordinator):
+        """Test preset mode is OOLONG when in oolong mode."""
+        mock_coordinator.data = {"mode": MODE_OOLONG}
+        assert climate_entity.preset_mode == PRESET_OOLONG
+
+    def test_preset_mode_coffee(self, climate_entity, mock_coordinator):
+        """Test preset mode is COFFEE when in coffee mode."""
+        mock_coordinator.data = {"mode": MODE_COFFEE}
+        assert climate_entity.preset_mode == PRESET_COFFEE
+
+    def test_preset_mode_my_temp(self, climate_entity, mock_coordinator):
+        """Test preset mode is MY_TEMP when in my temp mode."""
+        mock_coordinator.data = {"mode": MODE_MY_TEMP}
+        assert climate_entity.preset_mode == PRESET_MY_TEMP
+
+    def test_preset_mode_none_when_no_data(self, climate_entity, mock_coordinator):
+        """Test preset mode is None when no coordinator data."""
+        mock_coordinator.data = None
+        assert climate_entity.preset_mode is None
 
     def test_hvac_action_heating(self, climate_entity, mock_coordinator):
         """Test HVAC action is HEATING when actively heating."""
@@ -299,65 +322,98 @@ class TestCosoriKettleClimateSetHVACMode:
         mock_coordinator.async_request_refresh.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_set_hvac_mode_boil(self, climate_entity, mock_coordinator):
-        """Test setting HVAC mode to BOIL."""
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_BOIL)
+    async def test_set_hvac_mode_heat(self, climate_entity, mock_coordinator):
+        """Test setting HVAC mode to HEAT uses current preset or MY_TEMP."""
+        mock_coordinator.data = {"mode": MODE_BOIL, "my_temp": 180}
+        await climate_entity.async_set_hvac_mode(HVACMode.HEAT)
+
+        # Should use current preset (BOIL)
+        mock_coordinator.async_set_mode.assert_called_once_with(MODE_BOIL, 212, 0)
+        # Called twice: once in async_set_hvac_mode and once in async_set_preset_mode
+        assert mock_coordinator.async_request_refresh.call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_set_hvac_mode_heat_uses_my_temp_default(self, climate_entity, mock_coordinator):
+        """Test setting HVAC mode to HEAT with no current preset uses MY_TEMP."""
+        mock_coordinator.data = None
+        await climate_entity.async_set_hvac_mode(HVACMode.HEAT)
+
+        mock_coordinator.async_set_mode.assert_called_once_with(MODE_MY_TEMP, 212, 0)
+        # Called twice: once in async_set_hvac_mode and once in async_set_preset_mode
+        assert mock_coordinator.async_request_refresh.call_count == 2
+
+
+class TestCosoriKettleClimateSetPresetMode:
+    """Test async_set_preset_mode method."""
+
+    @pytest.mark.asyncio
+    async def test_set_preset_mode_boil(self, climate_entity, mock_coordinator):
+        """Test setting preset mode to BOIL."""
+        await climate_entity.async_set_preset_mode(PRESET_BOIL)
 
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_BOIL, 212, 0)
         mock_coordinator.async_request_refresh.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_set_hvac_mode_green_tea(self, climate_entity, mock_coordinator):
-        """Test setting HVAC mode to GREEN_TEA."""
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_GREEN_TEA)
+    async def test_set_preset_mode_green_tea(self, climate_entity, mock_coordinator):
+        """Test setting preset mode to GREEN_TEA."""
+        await climate_entity.async_set_preset_mode(PRESET_GREEN_TEA)
 
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_GREEN_TEA, 180, 0)
         mock_coordinator.async_request_refresh.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_set_hvac_mode_oolong(self, climate_entity, mock_coordinator):
-        """Test setting HVAC mode to OOLONG."""
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_OOLONG)
+    async def test_set_preset_mode_oolong(self, climate_entity, mock_coordinator):
+        """Test setting preset mode to OOLONG."""
+        await climate_entity.async_set_preset_mode(PRESET_OOLONG)
 
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_OOLONG, 195, 0)
         mock_coordinator.async_request_refresh.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_set_hvac_mode_coffee(self, climate_entity, mock_coordinator):
-        """Test setting HVAC mode to COFFEE."""
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_COFFEE)
+    async def test_set_preset_mode_coffee(self, climate_entity, mock_coordinator):
+        """Test setting preset mode to COFFEE."""
+        await climate_entity.async_set_preset_mode(PRESET_COFFEE)
 
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_COFFEE, 205, 0)
         mock_coordinator.async_request_refresh.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_set_hvac_mode_my_temp(self, climate_entity, mock_coordinator):
-        """Test setting HVAC mode to MY_TEMP."""
+    async def test_set_preset_mode_my_temp(self, climate_entity, mock_coordinator):
+        """Test setting preset mode to MY_TEMP."""
         mock_coordinator.data = {"my_temp": 180}
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_MY_TEMP)
+        await climate_entity.async_set_preset_mode(PRESET_MY_TEMP)
 
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_MY_TEMP, 180, 0)
         mock_coordinator.async_request_refresh.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_set_hvac_mode_my_temp_uses_default_when_no_data(
+    async def test_set_preset_mode_my_temp_uses_default_when_no_data(
         self, climate_entity, mock_coordinator
     ):
-        """Test that MY_TEMP mode uses default 212F when no my_temp in data."""
+        """Test that MY_TEMP preset uses default 212F when no my_temp in data."""
         mock_coordinator.data = None
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_MY_TEMP)
+        await climate_entity.async_set_preset_mode(PRESET_MY_TEMP)
 
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_MY_TEMP, 212, 0)
 
     @pytest.mark.asyncio
-    async def test_set_hvac_mode_my_temp_uses_default_when_missing(
+    async def test_set_preset_mode_my_temp_uses_default_when_missing(
         self, climate_entity, mock_coordinator
     ):
-        """Test that MY_TEMP mode uses default 212F when my_temp missing from data."""
+        """Test that MY_TEMP preset uses default 212F when my_temp missing from data."""
         mock_coordinator.data = {"temperature": 75}
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_MY_TEMP)
+        await climate_entity.async_set_preset_mode(PRESET_MY_TEMP)
 
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_MY_TEMP, 212, 0)
+
+    @pytest.mark.asyncio
+    async def test_set_preset_mode_invalid_preset(self, climate_entity, mock_coordinator):
+        """Test setting invalid preset mode does nothing."""
+        await climate_entity.async_set_preset_mode("invalid_preset")
+
+        mock_coordinator.async_set_mode.assert_not_called()
+        mock_coordinator.async_request_refresh.assert_not_called()
 
 
 class TestCosoriKettleClimateTurnOnOff:
@@ -366,11 +422,11 @@ class TestCosoriKettleClimateTurnOnOff:
     @pytest.mark.asyncio
     async def test_turn_on(self, climate_entity, mock_coordinator):
         """Test turn on calls set hvac mode to HEAT."""
-        mock_coordinator.data = {"my_temp": 180}
+        mock_coordinator.data = {"mode": MODE_MY_TEMP, "my_temp": 180}
         await climate_entity.async_turn_on()
 
+        # Should start heating with current preset
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_MY_TEMP, 180, 0)
-        mock_coordinator.async_request_refresh.assert_called_once()
 
     @pytest.mark.asyncio
     async def test_turn_off(self, climate_entity, mock_coordinator):
@@ -407,13 +463,24 @@ class TestCosoriKettleClimateCoordinatorDataUpdates:
     def test_hvac_mode_updates_from_coordinator(self, climate_entity, mock_coordinator):
         """Test HVAC mode reflects coordinator data changes."""
         mock_coordinator.data = {"heating": True, "mode": MODE_BOIL}
-        assert climate_entity.hvac_mode == HVAC_MODE_BOIL
+        assert climate_entity.hvac_mode == HVACMode.HEAT
 
         mock_coordinator.data = {"heating": True, "mode": MODE_MY_TEMP}
-        assert climate_entity.hvac_mode == HVAC_MODE_MY_TEMP
+        assert climate_entity.hvac_mode == HVACMode.HEAT
 
         mock_coordinator.data = {"heating": False}
         assert climate_entity.hvac_mode == HVACMode.OFF
+
+    def test_preset_mode_updates_from_coordinator(self, climate_entity, mock_coordinator):
+        """Test preset mode reflects coordinator data changes."""
+        mock_coordinator.data = {"mode": MODE_BOIL}
+        assert climate_entity.preset_mode == PRESET_BOIL
+
+        mock_coordinator.data = {"mode": MODE_MY_TEMP}
+        assert climate_entity.preset_mode == PRESET_MY_TEMP
+
+        mock_coordinator.data = {"mode": MODE_GREEN_TEA}
+        assert climate_entity.preset_mode == PRESET_GREEN_TEA
 
     def test_hvac_action_updates_from_coordinator(self, climate_entity, mock_coordinator):
         """Test HVAC action reflects coordinator data changes."""
@@ -429,40 +496,40 @@ class TestCosoriKettleClimateCoordinatorDataUpdates:
 
 
 class TestCosoriKettleClimateModeMappings:
-    """Test HVAC mode to kettle mode mappings are correct."""
+    """Test preset to kettle mode mappings are correct."""
 
-    def test_hvac_mode_to_kettle_mode_mapping(self):
-        """Test all HVAC mode to kettle mode mappings."""
-        assert HVAC_MODE_TO_KETTLE_MODE[HVAC_MODE_BOIL] == MODE_BOIL
-        assert HVAC_MODE_TO_KETTLE_MODE[HVAC_MODE_GREEN_TEA] == MODE_GREEN_TEA
-        assert HVAC_MODE_TO_KETTLE_MODE[HVAC_MODE_OOLONG] == MODE_OOLONG
-        assert HVAC_MODE_TO_KETTLE_MODE[HVAC_MODE_COFFEE] == MODE_COFFEE
-        assert HVAC_MODE_TO_KETTLE_MODE[HVAC_MODE_MY_TEMP] == MODE_MY_TEMP
+    def test_preset_to_kettle_mode_mapping(self):
+        """Test all preset to kettle mode mappings."""
+        assert PRESET_TO_KETTLE_MODE[PRESET_BOIL] == MODE_BOIL
+        assert PRESET_TO_KETTLE_MODE[PRESET_GREEN_TEA] == MODE_GREEN_TEA
+        assert PRESET_TO_KETTLE_MODE[PRESET_OOLONG] == MODE_OOLONG
+        assert PRESET_TO_KETTLE_MODE[PRESET_COFFEE] == MODE_COFFEE
+        assert PRESET_TO_KETTLE_MODE[PRESET_MY_TEMP] == MODE_MY_TEMP
 
-    def test_kettle_mode_to_hvac_mode_mapping(self):
-        """Test all kettle mode to HVAC mode mappings are inverse."""
-        assert KETTLE_MODE_TO_HVAC_MODE[MODE_BOIL] == HVAC_MODE_BOIL
-        assert KETTLE_MODE_TO_HVAC_MODE[MODE_GREEN_TEA] == HVAC_MODE_GREEN_TEA
-        assert KETTLE_MODE_TO_HVAC_MODE[MODE_OOLONG] == HVAC_MODE_OOLONG
-        assert KETTLE_MODE_TO_HVAC_MODE[MODE_COFFEE] == HVAC_MODE_COFFEE
-        assert KETTLE_MODE_TO_HVAC_MODE[MODE_MY_TEMP] == HVAC_MODE_MY_TEMP
+    def test_kettle_mode_to_preset_mapping(self):
+        """Test all kettle mode to preset mappings are inverse."""
+        assert KETTLE_MODE_TO_PRESET[MODE_BOIL] == PRESET_BOIL
+        assert KETTLE_MODE_TO_PRESET[MODE_GREEN_TEA] == PRESET_GREEN_TEA
+        assert KETTLE_MODE_TO_PRESET[MODE_OOLONG] == PRESET_OOLONG
+        assert KETTLE_MODE_TO_PRESET[MODE_COFFEE] == PRESET_COFFEE
+        assert KETTLE_MODE_TO_PRESET[MODE_MY_TEMP] == PRESET_MY_TEMP
 
     def test_mode_mappings_are_inverse(self):
-        """Test that HVAC to kettle and kettle to HVAC modes are inverses."""
-        for hvac_mode, kettle_mode in HVAC_MODE_TO_KETTLE_MODE.items():
-            assert KETTLE_MODE_TO_HVAC_MODE[kettle_mode] == hvac_mode
+        """Test that preset to kettle and kettle to preset modes are inverses."""
+        for preset, kettle_mode in PRESET_TO_KETTLE_MODE.items():
+            assert KETTLE_MODE_TO_PRESET[kettle_mode] == preset
 
 
 class TestCosoriKettleClimateConstants:
     """Test climate entity constants are correct."""
 
-    def test_hvac_mode_constants(self):
-        """Test HVAC mode constants are correctly defined."""
-        assert HVAC_MODE_BOIL == "boil"
-        assert HVAC_MODE_GREEN_TEA == "green_tea"
-        assert HVAC_MODE_OOLONG == "oolong"
-        assert HVAC_MODE_COFFEE == "coffee"
-        assert HVAC_MODE_MY_TEMP == "my_temp"
+    def test_preset_constants(self):
+        """Test preset constants are correctly defined."""
+        assert PRESET_BOIL == "Boil"
+        assert PRESET_GREEN_TEA == "Green Tea"
+        assert PRESET_OOLONG == "Oolong"
+        assert PRESET_COFFEE == "Coffee"
+        assert PRESET_MY_TEMP == "My Temp"
 
     def test_mode_temps_mapping(self):
         """Test mode temperature mappings are correct."""
@@ -473,16 +540,21 @@ class TestCosoriKettleClimateConstants:
 
     def test_all_hvac_modes_in_entity_modes(self, climate_entity):
         """Test all HVAC mode constants are in entity's modes."""
-        modes = [
-            HVACMode.OFF,
-            HVAC_MODE_BOIL,
-            HVAC_MODE_GREEN_TEA,
-            HVAC_MODE_OOLONG,
-            HVAC_MODE_COFFEE,
-            HVAC_MODE_MY_TEMP,
-        ]
+        modes = [HVACMode.OFF, HVACMode.HEAT]
         for mode in modes:
             assert mode in climate_entity._attr_hvac_modes
+
+    def test_all_presets_in_entity_presets(self, climate_entity):
+        """Test all preset constants are in entity's presets."""
+        presets = [
+            PRESET_BOIL,
+            PRESET_GREEN_TEA,
+            PRESET_OOLONG,
+            PRESET_COFFEE,
+            PRESET_MY_TEMP,
+        ]
+        for preset in presets:
+            assert preset in climate_entity._attr_preset_modes
 
 
 class TestCosoriKettleClimateEdgeCases:
@@ -515,23 +587,25 @@ class TestCosoriKettleClimateEdgeCases:
     @pytest.mark.asyncio
     async def test_set_hvac_mode_multiple_times(self, climate_entity, mock_coordinator):
         """Test setting HVAC mode multiple times."""
-        mock_coordinator.data = {"my_temp": 180}
+        mock_coordinator.data = {"mode": MODE_MY_TEMP, "my_temp": 180}
 
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_MY_TEMP)
+        await climate_entity.async_set_hvac_mode(HVACMode.HEAT)
         await climate_entity.async_set_hvac_mode(HVACMode.OFF)
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_BOIL)
+        await climate_entity.async_set_hvac_mode(HVACMode.HEAT)
 
         assert mock_coordinator.async_set_mode.call_count == 2
         assert mock_coordinator.async_stop_heating.call_count == 1
-        assert mock_coordinator.async_request_refresh.call_count == 3
+        # Called 5 times: 2x for first HEAT (set_hvac_mode + set_preset_mode),
+        # 1x for OFF, 2x for second HEAT
+        assert mock_coordinator.async_request_refresh.call_count == 5
 
     @pytest.mark.asyncio
-    async def test_set_hvac_mode_sequence(self, climate_entity, mock_coordinator):
-        """Test setting HVAC modes in sequence."""
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_BOIL)
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_GREEN_TEA)
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_OOLONG)
-        await climate_entity.async_set_hvac_mode(HVAC_MODE_COFFEE)
+    async def test_set_preset_mode_sequence(self, climate_entity, mock_coordinator):
+        """Test setting preset modes in sequence."""
+        await climate_entity.async_set_preset_mode(PRESET_BOIL)
+        await climate_entity.async_set_preset_mode(PRESET_GREEN_TEA)
+        await climate_entity.async_set_preset_mode(PRESET_OOLONG)
+        await climate_entity.async_set_preset_mode(PRESET_COFFEE)
 
         assert mock_coordinator.async_set_mode.call_count == 4
         assert mock_coordinator.async_request_refresh.call_count == 4
