@@ -12,6 +12,11 @@ from bleak.exc import BleakError
 from homeassistant.components import bluetooth
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryAuthFailed
+from homeassistant.helpers.device_registry import (
+    CONNECTION_BLUETOOTH,
+    DeviceInfo,
+    format_mac,
+)
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
@@ -77,9 +82,23 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._client: CosoriKettleBLEClient | None = None
 
     @property
-    def address(self) -> str | None:
+    def device_info(self) -> DeviceInfo:
+        """Entity device info."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, format_mac(self._ble_device.address))},
+            name="Cosori Kettle",
+            manufacturer=self.manufacturer or "Cosori",
+            model=self.model_number or "Smart Kettle",
+            hw_version=self.hardware_version,
+            sw_version=self.software_version,
+            suggested_area="Kitchen",
+            connections={(CONNECTION_BLUETOOTH, self._ble_device.address)},
+        )
+
+    @property
+    def formatted_address(self) -> str | None:
         """Return the mac address of the kettle."""
-        self._ble_device.address
+        return format_mac(self._ble_device.address)
 
     @property
     def hardware_version(self) -> str | None:

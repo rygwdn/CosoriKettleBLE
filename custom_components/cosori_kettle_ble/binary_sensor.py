@@ -46,7 +46,7 @@ async def async_setup_entry(
     coordinator: CosoriKettleCoordinator = hass.data[DOMAIN][entry.entry_id]
 
     async_add_entities(
-        CosoriKettleBinarySensor(coordinator, entry, description)
+        CosoriKettleBinarySensor(coordinator, description)
         for description in BINARY_SENSORS
     )
 
@@ -60,21 +60,13 @@ class CosoriKettleBinarySensor(CoordinatorEntity[CosoriKettleCoordinator], Binar
     def __init__(
         self,
         coordinator: CosoriKettleCoordinator,
-        entry: ConfigEntry,
         description: CosoriKettleBinarySensorEntityDescription,
     ) -> None:
         """Initialize the binary sensor."""
         super().__init__(coordinator)
         self.entity_description = description
-        self._attr_unique_id = f"{entry.entry_id}_{description.key}"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "Cosori Kettle",
-            "manufacturer": coordinator.manufacturer or "Cosori",
-            "model": coordinator.model_number or "Smart Kettle",
-            "hw_version": coordinator.hardware_version,
-            "sw_version": coordinator.software_version,
-        }
+        self._attr_unique_id = f"{coordinator.formatted_address}_{description.key}"
+        self._attr_device_info = coordinator.device_info
 
     @property
     def is_on(self) -> bool:

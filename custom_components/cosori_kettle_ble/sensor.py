@@ -110,9 +110,8 @@ async def async_setup_entry(
 ) -> None:
     """Set up the sensor platform."""
     coordinator: CosoriKettleCoordinator = hass.data[DOMAIN][entry.entry_id]
-
     async_add_entities(
-        CosoriKettleSensor(coordinator, entry, description)
+        CosoriKettleSensor(coordinator, description)
         for description in SENSORS
     )
 
@@ -126,26 +125,13 @@ class CosoriKettleSensor(CoordinatorEntity[CosoriKettleCoordinator], SensorEntit
     def __init__(
         self,
         coordinator: CosoriKettleCoordinator,
-        _: ConfigEntry,
         description: CosoriKettleSensorEntityDescription,
     ) -> None:
         """Initialize the sensor."""
         super().__init__(coordinator)
         self.entity_description = description
-
-        formatted_mac = format_mac(coordinator.address)
-        self._attr_unique_id = f"{formatted_mac}_{description.key}"
-
-        self._attr_device_info = DeviceInfo(
-            identifiers={(DOMAIN, formatted_mac)},
-            name="Cosori Kettle",
-            manufacturer=coordinator.manufacturer or "Cosori",
-            model=coordinator.model_number or "Smart Kettle",
-            hw_version=coordinator.hardware_version,
-            sw_version=coordinator.software_version,
-            suggested_area="Kitchen",
-            connections={(CONNECTION_BLUETOOTH, coordinator.address)},
-        )
+        self._attr_unique_id = f"{coordinator.formatted_address}_{description.key}"
+        self._attr_device_info = coordinator.device_info
 
     @property
     def native_value(self) -> any:

@@ -66,7 +66,7 @@ def mock_config_entry():
 @pytest.fixture
 def climate_entity(mock_coordinator, mock_config_entry):
     """Create a climate entity instance."""
-    return CosoriKettleClimate(mock_coordinator, mock_config_entry)
+    return CosoriKettleClimate(mock_coordinator)
 
 
 class TestCosoriKettleClimateInitialization:

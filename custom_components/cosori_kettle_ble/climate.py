@@ -66,7 +66,7 @@ async def async_setup_entry(
 ) -> None:
     """Set up the climate platform."""
     coordinator: CosoriKettleCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([CosoriKettleClimate(coordinator, entry)])
+    async_add_entities([CosoriKettleClimate(coordinator)])
 
 
 class CosoriKettleClimate(CoordinatorEntity[CosoriKettleCoordinator], ClimateEntity):
@@ -97,19 +97,12 @@ class CosoriKettleClimate(CoordinatorEntity[CosoriKettleCoordinator], ClimateEnt
     def __init__(
         self,
         coordinator: CosoriKettleCoordinator,
-        entry: ConfigEntry,
     ) -> None:
         """Initialize the climate entity."""
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_climate"
-        self._attr_device_info = {
-            "identifiers": {(DOMAIN, entry.entry_id)},
-            "name": "Cosori Kettle",
-            "manufacturer": coordinator.manufacturer or "Cosori",
-            "model": coordinator.model_number or "Smart Kettle",
-            "hw_version": coordinator.hardware_version,
-            "sw_version": coordinator.software_version,
-        }
+
+        self._attr_unique_id = f"{coordinator.formatted_address}_climate"
+        self._attr_device_info = coordinator.device_info
 
     @property
     def current_temperature(self) -> float | None:
