@@ -529,7 +529,7 @@ class TestCosoriKettleClimateConstants:
         assert PRESET_GREEN_TEA == "Green Tea"
         assert PRESET_OOLONG == "Oolong"
         assert PRESET_COFFEE == "Coffee"
-        assert PRESET_MY_TEMP == "My Temp"
+        assert PRESET_MY_TEMP == "MyBrew"
 
     def test_mode_temps_mapping(self):
         """Test mode temperature mappings are correct."""

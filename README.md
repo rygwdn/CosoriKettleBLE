@@ -30,11 +30,17 @@ Control your Cosori smart kettle from Home Assistant via Bluetooth Low Energy (d
 
 ### HACS (Recommended)
 
-1. Add this repository to HACS as a custom repository
-2. Install "Cosori Kettle BLE" from HACS
-3. Restart Home Assistant
-4. Go to Settings > Devices & Services > Add Integration
-5. Search for "Cosori Kettle BLE"
+1. Open HACS in Home Assistant
+2. Go to "Integrations"
+3. Click the three dots menu in the top right
+4. Select "Custom repositories"
+5. Add this repository URL: `https://github.com/rygwdn/CosoriKettleBLE`
+6. Select category "Integration"
+7. Click "Add"
+8. Find "Cosori Kettle BLE" in HACS and click "Download"
+9. Restart Home Assistant
+10. Go to Settings > Devices & Services > Add Integration
+11. Search for "Cosori Kettle BLE"
 
 ### Manual Installation
 
@@ -91,39 +97,9 @@ The Home Assistant config flow includes a helper to parse these packets automati
 
 ---
 
-# Finding Your Kettle's MAC Address
-
-**IMPORTANT:** The kettle will only appear in BLE scans if it's NOT already connected to another device (official app or Home Assistant integration). Disconnect from other devices first.
-
-### Using `bluetoothctl` (Linux)
-
-```bash
-sudo bluetoothctl
-scan on
-# Look for your kettle (usually shows as "Cosori" or similar)
-# Note the MAC address (e.g., C4:A9:B8:73:AB:29)
-scan off
-exit
-```
-
-### Using BLE Scanner App
-
-- **iOS**: "BLE Scanner" or "LightBlue"
-- **Android**: "nRF Connect" or "BLE Scanner"
-
-### Using Python Script
-
-```bash
-./scan.py
-```
-
----
-
 # Climate Entity & Thermostat Card
 
 The integration automatically creates a climate entity in Home Assistant, allowing you to use the native thermostat card with its semi-circle temperature slider.
-
-![Home Assistant Integration](Screenshot.png)
 
 ### Provided Entities
 
@@ -297,7 +273,10 @@ The kettle may report temperatures 1-3°F below the setpoint when holding temper
 
 To use the official Cosori mobile app (which requires exclusive BLE access):
 
-Remove the integration temporarily, use the app, then re-add the integration
+1. Remove the integration from Home Assistant (Settings > Devices & Services)
+2. Use the official app
+3. When done, disconnect from the app
+4. Re-add the integration in Home Assistant
 
 ---
 
@@ -319,28 +298,19 @@ logger:
 
 A standalone Python library is included at `custom_components/cosori_kettle_ble/cosori_kettle/` for controlling the kettle outside of Home Assistant.
 
-See [LIBRARY.md](LIBRARY.md) for library documentation and [custom_components/cosori_kettle_ble/cosori_kettle/README.md](custom_components/cosori_kettle_ble/cosori_kettle/README.md) for API details.
+See [custom_components/cosori_kettle_ble/cosori_kettle/README.md](custom_components/cosori_kettle_ble/cosori_kettle/README.md) for library documentation and API details.
 
 ## Testing
 
 ```bash
-# Run library tests
-uv run --extra test pytest tests/library/ -v
+# Run all tests
+uv run pytest
 
-# Run HA component tests
-uv run --extra test pytest tests/ha_component/ -v
-```
+# Run library tests only
+uv run pytest tests/library/ -v
 
-## Examples
-
-Interactive examples in `examples/`:
-
-```bash
-# Interactive control
-python examples/interactive.py [MAC_ADDRESS]
-
-# Simple boil example
-python examples/simple.py
+# Run HA component tests only
+uv run pytest tests/ha_component/ -v
 ```
 
 ---

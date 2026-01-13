@@ -351,7 +351,7 @@ The kettle does not automatically send status updates without prompting. Impleme
 
 ```
 Every 1-2 seconds:
-  1. Send poll command (0x21)
+  1. Send poll command (0x22)
   2. Wait for response
   3. Parse status packet
   4. Update internal state
@@ -618,7 +618,7 @@ V1 protocol supports ACK (acknowledgment) packets:
 
 **ACK Packet Structure:**
 ```
-A5 12 [seq] [len] [cs] [command_header] [payload]
+A5 12 [seq] [len_lo] [len_hi] [checksum] [command_header] [payload]
 ```
 
 The ACK mirrors the sequence number and command header from the original message. For registration/hello commands, the payload indicates success:

@@ -814,8 +814,13 @@ class TestCoordinatorCompactStatusHandler:
             valid=True,
         )
 
+        def close_coro(coro):
+            """Helper to close coroutine to avoid warnings."""
+            coro.close()
+            return MagicMock()
+
         with patch.object(coordinator, "async_set_updated_data") as mock_set, \
-             patch("asyncio.create_task") as mock_create_task:
+             patch("asyncio.create_task", side_effect=close_coro) as mock_create_task:
             coordinator._update_data_from_compact_status(status)
 
             # Should update data
@@ -848,8 +853,13 @@ class TestCoordinatorCompactStatusHandler:
             valid=True,
         )
 
+        def close_coro(coro):
+            """Helper to close coroutine to avoid warnings."""
+            coro.close()
+            return MagicMock()
+
         with patch.object(coordinator, "async_set_updated_data") as mock_set, \
-             patch("asyncio.create_task") as mock_create_task:
+             patch("asyncio.create_task", side_effect=close_coro) as mock_create_task:
             coordinator._update_data_from_compact_status(status)
 
             # Should update data
@@ -881,8 +891,13 @@ class TestCoordinatorCompactStatusHandler:
             valid=True,
         )
 
+        def close_coro(coro):
+            """Helper to close coroutine to avoid warnings."""
+            coro.close()
+            return MagicMock()
+
         with patch.object(coordinator, "async_set_updated_data") as mock_set, \
-             patch("asyncio.create_task") as mock_create_task:
+             patch("asyncio.create_task", side_effect=close_coro) as mock_create_task:
             coordinator._update_data_from_compact_status(status)
 
             # Should update data
