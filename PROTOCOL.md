@@ -317,6 +317,7 @@ Both fields correlate with the heating state, but they serve different purposes.
 **Temperature Ranges:**
 - **Setpoint (commanded):** 104-212°F (40-100°C)
   - This is the range you can set as a target temperature
+  - Device specification: 40°C to 100°C
 - **Current (sensor validation):** 40-230°F
   - Readings outside this range indicate sensor errors or corrupted packets
 - **Current (typical operation):** ~50-212°F
@@ -489,7 +490,7 @@ Special thanks to the implementation efforts that identified the correct byte po
 #### Register (Pairing)
 **Command:** `0180D100` + 32-byte registration key
 
-Device must be in pairing mode. Generate a 16-byte random key and encode as ASCII hex (32 bytes).
+Device must be in pairing mode. To enter pairing mode, **press and hold the "MyBrew" button** on the kettle. Generate a 16-byte random key and encode as ASCII hex (32 bytes).
 
 **Example:**
 ```
@@ -509,11 +510,13 @@ Use previously registered key to reconnect.
 **Command:** `01F0A300` + mode (2B BE) + hold_enable (1B) + hold_time (2B BE)
 
 **Modes:**
-- `0100`: Green Tea (180°F)
-- `0200`: Oolong (195°F)
-- `0300`: Coffee (205°F)
-- `0400`: Boil (212°F)
-- `0500`: My Temp (custom)
+- `0100`: Green Tea (180°F / 82°C)
+- `0200`: Oolong (195°F / 91°C)
+- `0300`: Coffee (205°F / 96°C)
+- `0400`: Boil (212°F / 100°C)
+- `0500`: MyBrew (custom temperature)
+
+**Hold time range:** 0 minutes to 60 minutes (0-3600 seconds, big-endian)
 
 **Examples:**
 ```
@@ -523,6 +526,8 @@ Start boil, hold 35 min:   A5 22 xx 09 00 [cs] 01 F0 A3 00 04 00 01 08 34
 
 #### Delayed Start
 **Command:** `01F1A300` + delay (2B BE) + mode (2B BE) + hold_enable (1B) + hold_time (2B BE)
+
+**Delay range:** 0 minutes to 12 hours (0-43200 seconds, big-endian)
 
 **Example:**
 ```
@@ -538,10 +543,10 @@ A5 22 xx 04 00 [cs] 01 F4 A3 00
 
 ### Configuration Commands
 
-#### Set My Temp
+#### Set MyBrew Temperature
 **Command:** `01F3A300` + temperature (1B)
 
-Set custom temperature for MY_TEMP mode (104-212°F).
+Set custom temperature for MyBrew mode (40-100°C / 104-212°F).
 
 **Example:**
 ```
@@ -600,7 +605,6 @@ Areas not yet fully understood:
 
 - **Error code meanings:** Specific error codes not yet documented
 - **Firmware updates:** OTA update mechanism (if any) not documented
-- **Pairing mode activation:** How to put device into pairing mode
 
 ## References
 
@@ -635,11 +639,11 @@ This replaces timing-based delays with proper protocol acknowledgments.
 
 | Mode | Value | Temperature | Description |
 |---|---|---|---|
-| Green Tea | 0x01 | 180°F | Optimal for green tea |
-| Oolong | 0x02 | 195°F | Optimal for oolong tea |
-| Coffee | 0x03 | 205°F | Optimal for coffee |
-| Boil | 0x04 | 212°F | Full boil |
-| My Temp | 0x05 | Custom | User-defined temperature |
+| Green Tea | 0x01 | 180°F (82°C) | Optimal for green tea |
+| Oolong | 0x02 | 195°F (91°C) | Optimal for oolong tea |
+| Coffee | 0x03 | 205°F (96°C) | Optimal for coffee |
+| Boil | 0x04 | 212°F (100°C) | Full boil |
+| MyBrew | 0x05 | Custom (40-100°C) | User-defined temperature |
 | Heat (V0) | 0x06 | Variable | Generic heating mode |
 
 ## Heating Stages
@@ -653,8 +657,9 @@ This replaces timing-based delays with proper protocol acknowledgments.
 
 ---
 
-**Document Version:** 2.0
-**Last Updated:** 2024-12-29
-**Kettle Model:** Cosori Smart Electric Kettle
+**Document Version:** 2.1
+**Last Updated:** 2026-01-12
+**Kettle Model:** Cosori Smart Electric Kettle (CS108-NK)
+**Product:** https://www.amazon.com/COSORI-Electric-Gooseneck-Variable-Stainless/dp/B08BFS92RP
 **Authors:** Reverse-engineered through BLE packet analysis
 **Protocol Versions:** V0 (legacy), V1 (current)

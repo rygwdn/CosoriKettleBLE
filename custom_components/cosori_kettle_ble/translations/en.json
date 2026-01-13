@@ -21,7 +21,7 @@
       },
       "pair_device": {
         "title": "Pair New Device",
-        "description": "Put your kettle into pairing mode, then click Submit to pair. A new registration key will be generated automatically."
+        "description": "Press and hold the MyBrew button on your kettle to enter pairing mode, then click Submit to pair. A new registration key will be generated automatically."
       },
       "enter_key": {
         "title": "Enter Registration Key",
@@ -32,7 +32,7 @@
       }
     },
     "error": {
-      "device_not_in_pairing_mode": "Device is not in pairing mode. Put the kettle in pairing mode and try again.",
+      "device_not_in_pairing_mode": "Device is not in pairing mode. Press and hold the MyBrew button on the kettle and try again.",
       "pairing_failed": "Failed to pair with device. Please try again.",
       "invalid_key": "Registration key was rejected by device. Check the key and try again.",
       "invalid_key_length": "Registration key must be exactly 32 hexadecimal characters.",

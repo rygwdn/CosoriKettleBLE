@@ -71,7 +71,7 @@ MODE_NAMES = {
     MODE_GREEN_TEA: "Green Tea",
     MODE_OOLONG: "Oolong",
     MODE_COFFEE: "Coffee",
-    MODE_MY_TEMP: "My Temp",
+    MODE_MY_TEMP: "MyBrew",
 }
 
 

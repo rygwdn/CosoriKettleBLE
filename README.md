@@ -5,14 +5,20 @@ Control your Cosori smart kettle from Home Assistant via Bluetooth Low Energy (d
 ## Features
 
 - **Real-time monitoring**: Temperature, setpoint, on-base status, heating state
-- **Remote control**: Start/stop heating, adjust target temperature (104-212°F)
-- **Climate entity**: Native thermostat card with preset modes (Boil, Green Tea, Oolong, Coffee)
-- **Automation-ready**: Full Home Assistant integration
+- **Remote control**: Start/stop heating, adjust target temperature (40-100°C / 104-212°F)
+- **Climate entity**: Native thermostat card with preset modes (Boil, Green Tea, Oolong, Coffee, MyBrew)
+- **Automation-ready**: Full Home Assistant integration with delay start and hold timers
 - **Automatic protocol detection**: Supports V0 and V1 firmware versions
 
 ## Hardware Compatibility
 
-- **Cosori Electric Gooseneck Kettle** with BLE: https://www.amazon.com/COSORI-Electric-Gooseneck-Variable-Stainless/dp/B07T1CH2HH
+- **Cosori Electric Gooseneck Kettle** with BLE: https://www.amazon.com/COSORI-Electric-Gooseneck-Variable-Stainless/dp/B08BFS92RP
+- **Model:** CS108-NK
+
+**Specifications:**
+- Temperature range: 40-100°C (104-212°F)
+- Delay start: 0 minutes to 12 hours
+- Hold time: 0 minutes to 60 minutes
 
 **IMPORTANT:** The kettle only supports ONE BLE connection at a time. Disconnect from the official app or other devices before connecting.
 
@@ -43,6 +49,13 @@ The integration supports automatic Bluetooth discovery. Your kettle must be:
 - Powered on and on its base
 - Within Bluetooth range
 - **NOT connected to another device** (disconnect from official app first)
+
+### First-Time Pairing
+
+To pair your kettle for the first time:
+1. **Press and hold the "MyBrew" button** on the kettle until it enters pairing mode
+2. The kettle will be discoverable via Bluetooth
+3. Follow the Home Assistant configuration flow to complete pairing
 
 ### Capturing Registration Key from Mobile App
 
@@ -140,10 +153,11 @@ The thermostat card provides:
 - **OFF mode**: Kettle is idle, not heating
 - **HEAT mode**: Kettle will heat to target temperature
 - **Preset modes**:
-  - Boil: 212°F
-  - Green Tea: 180°F
-  - Oolong: 195°F
-  - Coffee: 205°F
+  - Boil: 212°F (100°C)
+  - Green Tea: 180°F (82°C)
+  - Oolong: 195°F (91°C)
+  - Coffee: 205°F (96°C)
+  - MyBrew: Custom temperature (configurable)
 - **Temperature slider**: Adjust custom temperature (40-100°C / 104-212°F)
 - **Current temperature**: Shows actual water temperature
 - **Action**: Shows HEATING when actively warming, IDLE otherwise

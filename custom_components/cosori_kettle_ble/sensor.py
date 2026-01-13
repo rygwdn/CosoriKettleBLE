@@ -81,7 +81,7 @@ SENSORS: tuple[CosoriKettleSensorEntityDescription, ...] = (
     ),
     CosoriKettleSensorEntityDescription(
         key="my_temp",
-        name="My Temp Setting",
+        name="MyBrew Setting",
         device_class=SensorDeviceClass.TEMPERATURE,
         state_class=SensorStateClass.MEASUREMENT,
         native_unit_of_measurement=UnitOfTemperature.FAHRENHEIT,

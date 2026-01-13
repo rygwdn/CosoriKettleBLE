@@ -124,7 +124,7 @@ Uses pytest with asyncio support. Key patterns:
 
 Protocol requires a 16-byte registration key:
 
-1. **First-time pairing:** Kettle must be in pairing mode (long-press button)
+1. **First-time pairing:** Kettle must be in pairing mode - press and hold the "MyBrew" button
 2. **Registration command (0x80):** Sent during config flow to obtain key
 3. **Hello command (0x81):** Sent on every connection with registration key
 4. **Key validation:** Invalid key → ConfigEntryAuthFailed → requires re-pairing
