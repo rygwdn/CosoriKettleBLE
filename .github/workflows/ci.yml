@@ -24,10 +24,10 @@ jobs:
       uses: astral-sh/setup-uv@v5
 
     - name: Install dependencies
-      run: uv sync --extra test
+      run: uv sync --group dev
 
     - name: Run library tests
-      run: uv run --extra test pytest tests/library/ -v
+      run: uv run pytest tests/library/ -v
 
     - name: Run HA component tests
-      run: uv run --extra test pytest tests/ha_component/ -v
+      run: uv run pytest tests/ha_component/ -v
