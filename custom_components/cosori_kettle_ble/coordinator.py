@@ -78,6 +78,9 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._model_number: str | None = None
         self._manufacturer: str | None = None
 
+        # User-configured desired hold time for next heating command
+        self._desired_hold_time_minutes: int = 0
+
         # BLE client (will be initialized in async_start)
         self._client: CosoriKettleBLEClient | None = None
 
@@ -446,6 +449,24 @@ class CosoriKettleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
                             raise UpdateFailed(
                                 f"Failed to reconnect after {MAX_RECONNECT_ATTEMPTS} attempts"
                             ) from err
+
+    @property
+    def desired_hold_time_minutes(self) -> int:
+        """Return the user-configured desired hold time in minutes."""
+        return self._desired_hold_time_minutes
+
+    @property
+    def desired_hold_time_seconds(self) -> int:
+        """Return the user-configured desired hold time in seconds."""
+        return self._desired_hold_time_minutes * 60
+
+    async def async_set_desired_hold_time(self, minutes: int) -> None:
+        """Set the desired hold time for next heating command.
+
+        Args:
+            minutes: Hold time in minutes (0 = disabled)
+        """
+        self._desired_hold_time_minutes = int(minutes)
 
     async def async_set_mode(self, mode: int, temp_f: int, hold_time: int) -> None:
         """Set heating mode."""

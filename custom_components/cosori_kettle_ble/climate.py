@@ -171,7 +171,9 @@ class CosoriKettleClimate(CoordinatorEntity[CosoriKettleCoordinator], ClimateEnt
                 temp_f = preset_temp  # Use the exact preset temperature
                 break
 
-        await self.coordinator.async_set_mode(mode, temp_f, 0)
+        await self.coordinator.async_set_mode(
+            mode, temp_f, self.coordinator.desired_hold_time_seconds
+        )
         await self.coordinator.async_request_refresh()
 
     async def async_set_hvac_mode(self, hvac_mode: HVACMode) -> None:
@@ -200,7 +202,9 @@ class CosoriKettleClimate(CoordinatorEntity[CosoriKettleCoordinator], ClimateEnt
             # MY_TEMP mode - use current my_temp or default
             temp_f = self.coordinator.data.get("my_temp", 212) if self.coordinator.data else 212
 
-        await self.coordinator.async_set_mode(kettle_mode, temp_f, 0)
+        await self.coordinator.async_set_mode(
+            kettle_mode, temp_f, self.coordinator.desired_hold_time_seconds
+        )
         await self.coordinator.async_request_refresh()
 
     async def async_turn_on(self) -> None:

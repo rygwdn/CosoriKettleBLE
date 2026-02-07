@@ -57,6 +57,7 @@ def mock_coordinator():
         "manufacturer": "Cosori",
         "model": "Smart Kettle",
     }
+    coordinator.desired_hold_time_seconds = 0
     coordinator.async_set_mode = AsyncMock()
     coordinator.async_request_refresh = AsyncMock()
     coordinator.async_stop_heating = AsyncMock()
@@ -310,6 +311,15 @@ class TestCosoriKettleClimateSetTemperature:
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_BOIL, 212, 0)
 
 
+    @pytest.mark.asyncio
+    async def test_set_temperature_passes_hold_time(self, climate_entity, mock_coordinator):
+        """Test that hold time from coordinator is passed to async_set_mode."""
+        mock_coordinator.desired_hold_time_seconds = 1800
+        await climate_entity.async_set_temperature(temperature=175)
+
+        mock_coordinator.async_set_mode.assert_called_once_with(MODE_MY_TEMP, 175, 1800)
+
+
 class TestCosoriKettleClimateSetHVACMode:
     """Test async_set_hvac_mode method."""
 
@@ -406,6 +416,14 @@ class TestCosoriKettleClimateSetPresetMode:
         await climate_entity.async_set_preset_mode(PRESET_MY_TEMP)
 
         mock_coordinator.async_set_mode.assert_called_once_with(MODE_MY_TEMP, 212, 0)
+
+    @pytest.mark.asyncio
+    async def test_set_preset_mode_passes_hold_time(self, climate_entity, mock_coordinator):
+        """Test that hold time from coordinator is passed to async_set_mode."""
+        mock_coordinator.desired_hold_time_seconds = 600
+        await climate_entity.async_set_preset_mode(PRESET_BOIL)
+
+        mock_coordinator.async_set_mode.assert_called_once_with(MODE_BOIL, 212, 600)
 
     @pytest.mark.asyncio
     async def test_set_preset_mode_invalid_preset(self, climate_entity, mock_coordinator):
